@@ -2,90 +2,224 @@ import json
 import logging
 import os
 from datetime import datetime, timedelta
+
 from dotenv import load_dotenv
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Updater,
     CommandHandler,
-    CallbackContext,
     MessageHandler,
     Filters,
+    ConversationHandler,
+    CallbackContext,
 )
 from web3 import Web3
 
-# Load environment variables
+# Load environment variables from .env file
 load_dotenv()
 
-# Configuration
+# Configuration from .env
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
-ETH_RPC_URL = os.getenv('ETH_RPC_URL')
+ETH_RPC_URL = os.getenv('ETH_RPC_URL')  # Sepolia RPC endpoint (e.g., Infura)
 FAUCET_ADDRESS = os.getenv('FAUCET_ADDRESS')
 FAUCET_PRIVATE_KEY = os.getenv('FAUCET_PRIVATE_KEY')
 ADMIN_ID = int(os.getenv('ADMIN_ID', '0'))
 
-FAUCET_AMOUNT = 0.001  # Default faucet amount
-WHITELIST_FILE = 'whitelist.json'
-whitelist = {}
+# Faucet settings for Sepolia
+CHAIN_ID = 11155111   # Sepolia testnet chain ID
+FAUCET_AMOUNT = 0.001 # Amount of ETH to send per claim
 
-# Initialize logging
+# Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+logger.info("Starting Sepolia ETH Faucet Bot...")
 
-# Load Web3
-w3 = Web3(Web3.HTTPProvider(ETH_RPC_URL))
-if not w3.is_connected():
-    logger.error("Failed to connect to Ethereum network.")
-else:
-    logger.info("Connected to Ethereum network.")
+# Whitelist file and structure
+WHITELIST_FILE = 'whitelist.json'
+# Whitelist is a dictionary: { "telegram_user_id": [wallet1, wallet2, ...] }
+whitelist = {}
 
-# Load whitelist
 def load_whitelist():
     global whitelist
     if os.path.exists(WHITELIST_FILE):
-        with open(WHITELIST_FILE, 'r') as f:
-            whitelist = json.load(f)
+        try:
+            with open(WHITELIST_FILE, 'r') as f:
+                data = json.load(f)
+                whitelist = data.get("users", {})
+            logger.info("Whitelist loaded successfully.")
+        except Exception as e:
+            logger.error(f"Error loading whitelist: {e}")
+            whitelist = {}
     else:
-        whitelist = {}
+        # Initialize whitelist from .env variable WHITELISTED_USER_IDS (comma separated)
+        users_env = os.getenv('WHITELISTED_USER_IDS', '')
+        if users_env.strip():
+            whitelist = { str(int(x.strip())): [] for x in users_env.split(',') }
+            logger.info("Whitelist initialized from .env.")
+        else:
+            whitelist = {}
         save_whitelist()
 
 def save_whitelist():
-    with open(WHITELIST_FILE, 'w') as f:
-        json.dump(whitelist, f, indent=4)
+    data = {"users": whitelist}
+    try:
+        with open(WHITELIST_FILE, 'w') as f:
+            json.dump(data, f, indent=4)
+        logger.info("Whitelist saved successfully.")
+    except Exception as e:
+        logger.error(f"Error saving whitelist: {e}")
 
 load_whitelist()
+
+# Initialize Web3 connection (for sending ETH)
+w3 = Web3(Web3.HTTPProvider(ETH_RPC_URL))
+if not w3.is_connected():
+    logger.error("Failed to connect to the Ethereum network.")
+else:
+    logger.info("Connected to the Ethereum network.")
+
+# Rate limiting: record last claim time per user (by Telegram id, as int)
 last_claim = {}
 
-# Interactive Keyboard
-def main_menu():
-    keyboard = [
-        [InlineKeyboardButton("💧 Claim Faucet", callback_data='claim')],
-        [InlineKeyboardButton("⏰ Check Status", callback_data='status')],
-        [InlineKeyboardButton("❓ Help", callback_data='help')]
-    ]
-    return InlineKeyboardMarkup(keyboard)
+# --- Conversation State ---
+FAUCET_WAIT_ADDRESS = 1
 
-# Start Command
+# --- Reply Keyboard Main Menu ---
+def main_menu_keyboard(user_id: int):
+    # Simulate right-aligned buttons by adding an empty string cell on the left.
+    keyboard = [
+        ["", "💧 Claim Faucet"],
+        ["", "⏰ Check Status"],
+        ["", "❓ Help"]
+    ]
+    if user_id == ADMIN_ID:
+        keyboard.append(["", "⚙️ Admin Panel"])
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+
+# --- Command Handlers ---
 def start(update: Update, context: CallbackContext) -> None:
-    user_id = str(update.effective_user.id)
-    update.message.reply_text("Welcome to the Sepolia ETH Faucet Bot! Choose an option:", reply_markup=main_menu())
+    user_id = update.effective_user.id
+    update.message.reply_text(
+        "Welcome to the Sepolia ETH Faucet Bot!\n\nPlease use the buttons below to navigate:",
+        reply_markup=main_menu_keyboard(user_id)
+    )
     logger.info(f"User {user_id} started the bot.")
 
-# Admin Commands
+def help_command(update: Update, context: CallbackContext) -> None:
+    user_id = update.effective_user.id
+    help_text = (
+        "Sepolia ETH Faucet Bot Help:\n\n"
+        "• Tap 'Claim Faucet' to request 0.001 ETH (if eligible).\n"
+        "• Tap 'Check Status' to view your claim cooldown.\n"
+        "• Only whitelisted users (with approved wallet addresses) can claim ETH.\n"
+        "• Each whitelisted user may have up to 10 wallet addresses (added by admin).\n"
+        "• You can claim only once every 24 hours.\n\n"
+        "Admin Commands (admin only):\n"
+        "  /adduser <telegram_user_id>\n"
+        "  /removeuser <telegram_user_id>\n"
+        "  /addwallet <wallet_address> <telegram_user_id>\n"
+        "  /addwl <telegram_user_id> <wallet_address>\n"
+        "  /removewallet <wallet_address>\n"
+        "  /setamount <amount>\n"
+        "  /whitelist or /listwhitelist"
+    )
+    update.message.reply_text(help_text, reply_markup=main_menu_keyboard(user_id))
+    logger.info(f"User {update.effective_user.id} requested help.")
+
+def status(update: Update, context: CallbackContext) -> None:
+    user_id = update.effective_user.id
+    user_key = str(user_id)
+    if user_key not in whitelist:
+        update.message.reply_text("Sorry, you are not authorized to claim ETH.", reply_markup=main_menu_keyboard(user_id))
+        logger.info(f"Unauthorized status check by user {user_id}.")
+        return
+    now = datetime.now()
+    if user_id in last_claim:
+        elapsed = now - last_claim[user_id]
+        if elapsed < timedelta(hours=24):
+            remaining = timedelta(hours=24) - elapsed
+            update.message.reply_text(f"You're on cooldown. Try again in {str(remaining).split('.')[0]}.", reply_markup=main_menu_keyboard(user_id))
+            logger.info(f"User {user_id} is on cooldown: {str(remaining).split('.')[0]}.")
+            return
+    update.message.reply_text("Great news! You are eligible for a claim.", reply_markup=main_menu_keyboard(user_id))
+    logger.info(f"User {user_id} is eligible for a claim.")
+
+# --- Faucet Claim Conversation ---
+def faucet_start(update: Update, context: CallbackContext) -> int:
+    user_id = update.effective_user.id
+    update.message.reply_text(
+        "You've chosen to claim ETH.\nPlease type your Ethereum address (or send /cancel to abort):",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    logger.info(f"User {user_id} initiated a faucet claim.")
+    return FAUCET_WAIT_ADDRESS
+
+def faucet_receive_address(update: Update, context: CallbackContext) -> int:
+    user_id = update.effective_user.id
+    user_key = str(user_id)
+    eth_address = update.message.text.strip().lower()
+    
+    if user_key not in whitelist:
+        update.message.reply_text("Sorry, you are not authorized to use this faucet.")
+        logger.info(f"Unauthorized faucet claim attempt by user {user_id}.")
+        return ConversationHandler.END
+    if not w3.isAddress(eth_address):
+        update.message.reply_text("That doesn't seem like a valid Ethereum address. Please try again (or send /cancel to abort):")
+        return FAUCET_WAIT_ADDRESS
+    if eth_address not in whitelist[user_key]:
+        update.message.reply_text("This wallet address is not authorized for faucet claims.")
+        logger.info(f"User {user_id} provided an unapproved wallet address: {eth_address}.")
+        return ConversationHandler.END
+    now = datetime.now()
+    if user_id in last_claim:
+        elapsed = now - last_claim[user_id]
+        if elapsed < timedelta(hours=24):
+            remaining = timedelta(hours=24) - elapsed
+            update.message.reply_text(f"Oops! You can only claim once every 24 hours. Try again in {str(remaining).split('.')[0]}.")
+            logger.info(f"User {user_id} is on cooldown.")
+            return ConversationHandler.END
+    # Build and send ETH transaction on Sepolia
+    tx = {
+        'nonce': w3.eth.getTransactionCount(FAUCET_ADDRESS),
+        'to': eth_address,
+        'value': w3.toWei(FAUCET_AMOUNT, 'ether'),
+        'gas': 21000,
+        'gasPrice': w3.eth.gas_price,
+        'chainId': CHAIN_ID
+    }
+    try:
+        signed_tx = w3.eth.account.sign_transaction(tx, FAUCET_PRIVATE_KEY)
+        tx_hash = w3.eth.send_raw_transaction(signed_tx.rawTransaction)
+        last_claim[user_id] = now
+        etherscan_link = f"https://sepolia.etherscan.io/tx/{tx_hash.hex()}"
+        update.message.reply_text(f"Your transaction was successful!\nTx Hash: {tx_hash.hex()}\nView on Etherscan: {etherscan_link}")
+        logger.info(f"User {user_id} claimed faucet successfully. Tx: {tx_hash.hex()}")
+    except Exception as e:
+        update.message.reply_text(f"An error occurred: {str(e)}")
+        logger.error(f"Error during faucet claim for user {user_id}: {e}")
+    update.message.reply_text("Returning to main menu.", reply_markup=main_menu_keyboard(user_id))
+    return ConversationHandler.END
+
+def faucet_cancel(update: Update, context: CallbackContext) -> int:
+    user_id = update.effective_user.id
+    update.message.reply_text("Faucet claim canceled.", reply_markup=main_menu_keyboard(user_id))
+    logger.info(f"User {user_id} canceled faucet claim.")
+    return ConversationHandler.END
+
+# --- Admin Commands ---
 def add_user(update: Update, context: CallbackContext) -> None:
     if update.effective_user.id != ADMIN_ID:
         update.message.reply_text("❌ You are not authorized to use this command.")
         return
-
     if len(context.args) != 1:
         update.message.reply_text("Usage: /adduser <telegram_user_id>")
         return
-
     user_id = context.args[0]
     if user_id not in whitelist:
         whitelist[user_id] = []
         save_whitelist()
         update.message.reply_text(f"✅ User {user_id} added to the whitelist.")
-        logger.info(f"User {user_id} added to the whitelist.")
+        logger.info(f"Admin added user {user_id} to whitelist.")
     else:
         update.message.reply_text("⚠️ User is already whitelisted.")
 
@@ -93,37 +227,58 @@ def remove_user(update: Update, context: CallbackContext) -> None:
     if update.effective_user.id != ADMIN_ID:
         update.message.reply_text("❌ You are not authorized to use this command.")
         return
-
     if len(context.args) != 1:
         update.message.reply_text("Usage: /removeuser <telegram_user_id>")
         return
-
     user_id = context.args[0]
     if user_id in whitelist:
         del whitelist[user_id]
         save_whitelist()
         update.message.reply_text(f"✅ User {user_id} removed from the whitelist.")
-        logger.info(f"User {user_id} removed from the whitelist.")
+        logger.info(f"Admin removed user {user_id} from whitelist.")
     else:
-        update.message.reply_text("⚠️ User not found.")
+        update.message.reply_text("⚠️ User not found in whitelist.")
 
 def add_wallet(update: Update, context: CallbackContext) -> None:
     if update.effective_user.id != ADMIN_ID:
         update.message.reply_text("❌ You are not authorized to use this command.")
         return
-
     if len(context.args) != 2:
         update.message.reply_text("Usage: /addwallet <wallet_address> <telegram_user_id>")
         return
-
-    wallet, user_id = context.args
+    wallet = context.args[0].lower()
+    user_id = context.args[1]
     if user_id in whitelist:
         if len(whitelist[user_id]) < 10:
             if wallet not in whitelist[user_id]:
                 whitelist[user_id].append(wallet)
                 save_whitelist()
                 update.message.reply_text(f"✅ Wallet {wallet} added for user {user_id}.")
-                logger.info(f"Wallet {wallet} added for user {user_id}.")
+                logger.info(f"Admin added wallet {wallet} for user {user_id}.")
+            else:
+                update.message.reply_text("⚠️ Wallet already whitelisted.")
+        else:
+            update.message.reply_text("❌ User already has 10 wallets.")
+    else:
+        update.message.reply_text("❌ User is not whitelisted.")
+
+def add_wl(update: Update, context: CallbackContext) -> None:
+    # New command: /addwl <telegram_user_id> <wallet_address>
+    if update.effective_user.id != ADMIN_ID:
+        update.message.reply_text("❌ You are not authorized to use this command.")
+        return
+    if len(context.args) != 2:
+        update.message.reply_text("Usage: /addwl <telegram_user_id> <wallet_address>")
+        return
+    user_id = context.args[0]
+    wallet = context.args[1].lower()
+    if user_id in whitelist:
+        if len(whitelist[user_id]) < 10:
+            if wallet not in whitelist[user_id]:
+                whitelist[user_id].append(wallet)
+                save_whitelist()
+                update.message.reply_text(f"✅ Wallet {wallet} added for user {user_id}.")
+                logger.info(f"Admin (via addwl) added wallet {wallet} for user {user_id}.")
             else:
                 update.message.reply_text("⚠️ Wallet already whitelisted.")
         else:
@@ -135,68 +290,94 @@ def remove_wallet(update: Update, context: CallbackContext) -> None:
     if update.effective_user.id != ADMIN_ID:
         update.message.reply_text("❌ You are not authorized to use this command.")
         return
-
     if len(context.args) != 1:
         update.message.reply_text("Usage: /removewallet <wallet_address>")
         return
-
-    wallet = context.args[0]
+    wallet = context.args[0].lower()
+    found = False
     for user_id, wallets in whitelist.items():
         if wallet in wallets:
-            whitelist[user_id].remove(wallet)
-            save_whitelist()
-            update.message.reply_text(f"✅ Wallet {wallet} removed.")
-            logger.info(f"Wallet {wallet} removed from user {user_id}.")
-            return
+            wallets.remove(wallet)
+            found = True
+            break
+    if found:
+        save_whitelist()
+        update.message.reply_text(f"✅ Wallet {wallet} removed from whitelist.")
+        logger.info(f"Admin removed wallet {wallet}.")
+    else:
+        update.message.reply_text("⚠️ Wallet not found in whitelist.")
 
-    update.message.reply_text("⚠️ Wallet not found.")
+def set_amount(update: Update, context: CallbackContext) -> None:
+    if update.effective_user.id != ADMIN_ID:
+        update.message.reply_text("❌ You are not authorized to use this command.")
+        return
+    if len(context.args) != 1:
+        update.message.reply_text("Usage: /setamount <amount>")
+        return
+    try:
+        new_amount = float(context.args[0])
+        global FAUCET_AMOUNT
+        FAUCET_AMOUNT = new_amount
+        update.message.reply_text(f"✅ Faucet amount set to {new_amount} ETH.")
+        logger.info(f"Admin set faucet amount to {new_amount} ETH.")
+    except ValueError:
+        update.message.reply_text("❌ Invalid amount. Please enter a valid number.")
 
 def list_whitelist(update: Update, context: CallbackContext) -> None:
     if update.effective_user.id != ADMIN_ID:
         update.message.reply_text("❌ You are not authorized to use this command.")
         return
-
-    whitelist_text = "📝 **Whitelist Users**\n"
+    text = "📝 Whitelist:\n"
     for user_id, wallets in whitelist.items():
-        whitelist_text += f"🆔 {user_id}: {wallets}\n"
+        text += f"User {user_id}: {wallets if wallets else 'No wallets'}\n"
+    update.message.reply_text(text if text.strip() else "⚠️ No users in whitelist.")
 
-    update.message.reply_text(whitelist_text if whitelist else "⚠️ No users in whitelist.")
+# --- Main Menu Handler ---
+def main_menu_handler(update: Update, context: CallbackContext) -> None:
+    text = update.message.text.strip()
+    user_id = update.effective_user.id
+    if text == "💧 Claim Faucet":
+        faucet_start(update, context)
+    elif text == "⏰ Check Status":
+        status(update, context)
+    elif text == "❓ Help":
+        help_command(update, context)
+    elif text == "⚙️ Admin Panel" and user_id == ADMIN_ID:
+        admin_panel(update, context)
+    else:
+        update.message.reply_text("Please choose an option from the menu.", reply_markup=main_menu_keyboard(user_id))
 
-# Faucet Claim
-def claim(update: Update, context: CallbackContext) -> None:
-    user_id = str(update.effective_user.id)
-    if user_id not in whitelist:
-        update.message.reply_text("❌ You are not whitelisted.")
-        return
+# --- Faucet Conversation Handler ---
+faucet_conv_handler = ConversationHandler(
+    entry_points=[MessageHandler(Filters.regex("^💧 Claim Faucet$"), faucet_start)],
+    states={
+        FAUCET_WAIT_ADDRESS: [MessageHandler(Filters.text & ~Filters.command, faucet_receive_address)]
+    },
+    fallbacks=[CommandHandler("cancel", faucet_cancel)],
+    per_user=True,
+)
 
-    if user_id in last_claim and (datetime.now() - last_claim[user_id]) < timedelta(hours=24):
-        update.message.reply_text("⏳ Please wait 24 hours before claiming again.")
-        return
+# --- Dispatcher Registration ---
+def main():
+    updater = Updater(TELEGRAM_TOKEN, use_context=True)
+    dp = updater.dispatcher
 
-    update.message.reply_text("Send your whitelisted wallet address:")
-    context.user_data['waiting_for_address'] = True
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(faucet_conv_handler)
+    dp.add_handler(MessageHandler(Filters.regex("^(💧 Claim Faucet|⏰ Check Status|❓ Help|⚙️ Admin Panel)$"), main_menu_handler))
+    dp.add_handler(CommandHandler("adduser", add_user))
+    dp.add_handler(CommandHandler("removeuser", remove_user))
+    dp.add_handler(CommandHandler("addwallet", add_wallet))
+    dp.add_handler(CommandHandler("addwl", add_wl))
+    dp.add_handler(CommandHandler("removewallet", remove_wallet))
+    dp.add_handler(CommandHandler("setamount", set_amount))
+    dp.add_handler(CommandHandler("whitelist", list_whitelist))
+    dp.add_handler(CommandHandler("listwhitelist", list_whitelist))
+    dp.add_handler(CommandHandler("admin", admin_panel))
 
-def receive_wallet(update: Update, context: CallbackContext) -> None:
-    user_id = str(update.effective_user.id)
-    if 'waiting_for_address' in context.user_data and context.user_data['waiting_for_address']:
-        wallet = update.message.text.strip()
-        if wallet in whitelist[user_id]:
-            update.message.reply_text(f"✅ Transaction sent to {wallet}.")
-            last_claim[user_id] = datetime.now()
-        else:
-            update.message.reply_text("❌ Address not in whitelist.")
+    updater.start_polling()
+    logger.info("Bot started!")
+    updater.idle()
 
-# Start Bot
-updater = Updater(TELEGRAM_TOKEN, use_context=True)
-dp = updater.dispatcher
-
-dp.add_handler(CommandHandler("start", start))
-dp.add_handler(CommandHandler("adduser", add_user))
-dp.add_handler(CommandHandler("removeuser", remove_user))
-dp.add_handler(CommandHandler("addwallet", add_wallet))
-dp.add_handler(CommandHandler("removewallet", remove_wallet))
-dp.add_handler(CommandHandler("whitelist", list_whitelist))
-dp.add_handler(MessageHandler(Filters.text & ~Filters.command, receive_wallet))
-
-updater.start_polling()
-logger.info("Bot started!")
+if __name__ == '__main__':
+    main()
