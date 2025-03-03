@@ -19,7 +19,7 @@ from web3 import Web3
 load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
-ETH_RPC_URL = os.getenv('ETH_RPC_URL')  # Sepolia RPC endpoint (e.g., via Infura)
+ETH_RPC_URL = os.getenv('ETH_RPC_URL')  # Sepolia RPC endpoint (e.g., via Infura or Alchemy)
 FAUCET_ADDRESS = os.getenv('FAUCET_ADDRESS')
 FAUCET_PRIVATE_KEY = os.getenv('FAUCET_PRIVATE_KEY')
 ADMIN_ID = int(os.getenv('ADMIN_ID', '0'))
@@ -119,7 +119,7 @@ def help_command(update: Update, context: CallbackContext) -> None:
         "/setamount <amount>\n"
         "/whitelist or /listwhitelist"
     )
-    update.message.reply_text(help_text, reply_markup=main_menu_keyboard(update.effective_user.id))
+    update.message.reply_text(help_text, reply_markup=main_menu_keyboard(user_id))
     logger.info(f"User {update.effective_user.id} requested help.")
 
 def status(update: Update, context: CallbackContext) -> None:
@@ -177,8 +177,8 @@ def faucet_receive_address(update: Update, context: CallbackContext) -> int:
             update.message.reply_text(f"Oops! You can only claim once every 24 hours. Try again in {str(remaining).split('.')[0]}.")
             logger.info(f"User {user_id} attempted claim during cooldown.")
             return ConversationHandler.END
-    # Convert addresses to checksum format
     try:
+        # Convert addresses to checksum format
         to_address = w3.to_checksum_address(eth_address)
         faucet_addr = w3.to_checksum_address(FAUCET_ADDRESS)
     except Exception as e:
@@ -198,11 +198,15 @@ def faucet_receive_address(update: Update, context: CallbackContext) -> int:
         signed_tx = w3.eth.account.sign_transaction(tx, FAUCET_PRIVATE_KEY)
         tx_hash = w3.eth.send_raw_transaction(signed_tx.raw_transaction)
         last_claim[user_id] = now
-        etherscan_link = f"https://sepolia.etherscan.io/tx/{tx_hash.hex()}"
+        # Ensure the hash string includes '0x'
+        hash_str = tx_hash.hex()
+        if not hash_str.startswith("0x"):
+            hash_str = "0x" + hash_str
+        etherscan_link = f"https://sepolia.etherscan.io/tx/{hash_str}"
         update.message.reply_text(
-            f"Your transaction was successful!\nTx Hash: {tx_hash.hex()}\nView on Etherscan: {etherscan_link}"
+            f"Your transaction was successful!\nTx Hash: {hash_str}\nView on Etherscan: {etherscan_link}"
         )
-        logger.info(f"User {user_id} claimed faucet. Tx: {tx_hash.hex()}")
+        logger.info(f"User {user_id} claimed faucet. Tx: {hash_str}")
     except Exception as e:
         update.message.reply_text(f"An error occurred: {str(e)}")
         logger.error(f"Error during faucet claim for user {user_id}: {e}")
@@ -217,8 +221,10 @@ def faucet_cancel(update: Update, context: CallbackContext) -> int:
 
 # --- Admin Commands ---
 def admin_panel(update: Update, context: CallbackContext) -> None:
-    update.message.reply_text("Admin panel is accessible via text commands (e.g., /adduser, /addwallet, etc.).",
-                                reply_markup=main_menu_keyboard(ADMIN_ID))
+    update.message.reply_text(
+        "Admin panel is accessible via text commands (e.g., /adduser, /addwallet, etc.).",
+        reply_markup=main_menu_keyboard(ADMIN_ID)
+    )
     logger.info(f"Admin panel accessed by user {update.effective_user.id}.")
 
 def add_user(update: Update, context: CallbackContext) -> None:
