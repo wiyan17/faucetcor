@@ -48,10 +48,10 @@ def load_whitelist():
             logger.error(f"Error loading whitelist: {e}")
             whitelist = {}
     else:
-        # Initialize whitelist from .env variable WHITELISTED_USER_IDS (comma separated)
+        # Initialize from WHITELISTED_USER_IDS in .env (comma-separated)
         users_env = os.getenv('WHITELISTED_USER_IDS', '')
         if users_env.strip():
-            whitelist = { str(int(x.strip())): [] for x in users_env.split(',') }
+            whitelist = {str(int(x.strip())): [] for x in users_env.split(',')}
             logger.info("Whitelist initialized from .env.")
         else:
             whitelist = {}
@@ -116,7 +116,6 @@ def help_command(update: Update, context: CallbackContext) -> None:
         "/adduser <telegram_user_id>\n"
         "/removeuser <telegram_user_id>\n"
         "/addwallet <wallet_address> <telegram_user_id>\n"
-        "/addwl <telegram_user_id> <wallet_address>\n"
         "/removewallet <wallet_address>\n"
         "/setamount <amount>\n"
         "/whitelist or /listwhitelist"
@@ -136,7 +135,8 @@ def status(update: Update, context: CallbackContext) -> None:
         elapsed = now - last_claim[user_id]
         if elapsed < timedelta(hours=24):
             remaining = timedelta(hours=24) - elapsed
-            update.message.reply_text(f"You're on cooldown. Try again in {str(remaining).split('.')[0]}.", reply_markup=main_menu_keyboard(user_id))
+            update.message.reply_text(f"You're on cooldown. Try again in {str(remaining).split('.')[0]}.",
+                                        reply_markup=main_menu_keyboard(user_id))
             logger.info(f"User {user_id} is on cooldown: {str(remaining).split('.')[0]}.")
             return
     update.message.reply_text("Great news! You are eligible for a claim.", reply_markup=main_menu_keyboard(user_id))
@@ -161,7 +161,6 @@ def faucet_receive_address(update: Update, context: CallbackContext) -> int:
         update.message.reply_text("Sorry, you are not authorized to use this faucet.")
         logger.info(f"Unauthorized faucet claim attempt by user {user_id}.")
         return ConversationHandler.END
-    # Use the correct method is_address() instead of isAddress()
     if not w3.is_address(eth_address):
         update.message.reply_text("That doesn't seem like a valid Ethereum address. Please try again (or send /cancel to abort):")
         return FAUCET_WAIT_ADDRESS
@@ -190,7 +189,9 @@ def faucet_receive_address(update: Update, context: CallbackContext) -> int:
         tx_hash = w3.eth.send_raw_transaction(signed_tx.rawTransaction)
         last_claim[user_id] = now
         etherscan_link = f"https://sepolia.etherscan.io/tx/{tx_hash.hex()}"
-        update.message.reply_text(f"Your transaction was successful!\nTx Hash: {tx_hash.hex()}\nView on Etherscan: {etherscan_link}")
+        update.message.reply_text(
+            f"Your transaction was successful!\nTx Hash: {tx_hash.hex()}\nView on Etherscan: {etherscan_link}"
+        )
         logger.info(f"User {user_id} claimed faucet. Tx: {tx_hash.hex()}")
     except Exception as e:
         update.message.reply_text(f"An error occurred: {str(e)}")
@@ -206,7 +207,7 @@ def faucet_cancel(update: Update, context: CallbackContext) -> int:
 
 # --- Admin Commands ---
 def admin_panel(update: Update, context: CallbackContext) -> None:
-    update.message.reply_text("Admin panel is accessible via text commands (e.g., /adduser, /addwl, etc.).",
+    update.message.reply_text("Admin panel is accessible via text commands (e.g., /adduser, /addwallet, etc.).",
                                 reply_markup=main_menu_keyboard(ADMIN_ID))
     logger.info(f"Admin panel accessed by user {update.effective_user.id}.")
 
@@ -258,30 +259,6 @@ def add_wallet(update: Update, context: CallbackContext) -> None:
                 save_whitelist()
                 update.message.reply_text(f"✅ Wallet {wallet} added for user {user_id}.")
                 logger.info(f"Admin added wallet {wallet} for user {user_id}.")
-            else:
-                update.message.reply_text("⚠️ Wallet already whitelisted.")
-        else:
-            update.message.reply_text("❌ User already has 10 wallets.")
-    else:
-        update.message.reply_text("❌ User is not whitelisted.")
-
-def add_wl(update: Update, context: CallbackContext) -> None:
-    # New command: /addwl <telegram_user_id> <wallet_address>
-    if update.effective_user.id != ADMIN_ID:
-        update.message.reply_text("❌ You are not authorized to use this command.")
-        return
-    if len(context.args) != 2:
-        update.message.reply_text("Usage: /addwl <telegram_user_id> <wallet_address>")
-        return
-    user_id = context.args[0]
-    wallet = context.args[1].lower()
-    if user_id in whitelist:
-        if len(whitelist[user_id]) < 10:
-            if wallet not in whitelist[user_id]:
-                whitelist[user_id].append(wallet)
-                save_whitelist()
-                update.message.reply_text(f"✅ Wallet {wallet} added for user {user_id}.")
-                logger.info(f"Admin (via addwl) added wallet {wallet} for user {user_id}.")
             else:
                 update.message.reply_text("⚠️ Wallet already whitelisted.")
         else:
@@ -371,7 +348,6 @@ def main():
     dp.add_handler(CommandHandler("adduser", add_user))
     dp.add_handler(CommandHandler("removeuser", remove_user))
     dp.add_handler(CommandHandler("addwallet", add_wallet))
-    dp.add_handler(CommandHandler("addwl", add_wl))
     dp.add_handler(CommandHandler("removewallet", remove_wallet))
     dp.add_handler(CommandHandler("setamount", set_amount))
     dp.add_handler(CommandHandler("whitelist", list_whitelist))
