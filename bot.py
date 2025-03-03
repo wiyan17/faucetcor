@@ -30,7 +30,7 @@ WHITELIST_FILE = 'whitelist.json'
 # --- Setup logging ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-logger.info("Starting Sepolia ETH Faucet Bot...")
+logger.info("Starting Sepolia ARB Faucet Bot...")
 
 # --- Whitelist storage ---
 # Structure: { "telegram_user_id": [wallet_address1, wallet_address2, ...] }
@@ -97,7 +97,7 @@ def main_menu_keyboard(user_id: int):
 def start(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     update.message.reply_text(
-        "Welcome to the Sepolia ETH Faucet Bot!\n\nPlease use the buttons below to navigate:",
+        "Welcome to the Cortensor Sepolia ARB Faucet Bot!\n\nPlease use the buttons below to navigate:",
         reply_markup=main_menu_keyboard(user_id)
     )
     logger.info(f"User {user_id} started the bot.")
@@ -105,7 +105,7 @@ def start(update: Update, context: CallbackContext) -> None:
 def help_command(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     help_text = (
-        "Sepolia ETH Faucet Bot Help:\n\n"
+        "Cortensor Sepolia ARB Faucet Bot Help:\n\n"
         "• Tap 'Claim Faucet' to request 0.001 ETH (if eligible).\n"
         "• Tap 'Check Status' to view your claim cooldown.\n"
         "• Only whitelisted users (with approved wallet addresses) can claim ETH.\n"
