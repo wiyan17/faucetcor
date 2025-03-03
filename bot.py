@@ -4,7 +4,7 @@ import os
 from datetime import datetime, timedelta
 
 from dotenv import load_dotenv
-from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Updater,
     CommandHandler,
@@ -15,28 +15,25 @@ from telegram.ext import (
 )
 from web3 import Web3
 
-# Load environment variables from .env file
+# --- Load environment variables ---
 load_dotenv()
 
-# Configuration from .env
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 ETH_RPC_URL = os.getenv('ETH_RPC_URL')  # Sepolia RPC endpoint (e.g., Infura)
 FAUCET_ADDRESS = os.getenv('FAUCET_ADDRESS')
 FAUCET_PRIVATE_KEY = os.getenv('FAUCET_PRIVATE_KEY')
 ADMIN_ID = int(os.getenv('ADMIN_ID', '0'))
-
-# Faucet settings for Sepolia
+FAUCET_AMOUNT = 0.001  # ETH to send per claim
 CHAIN_ID = 11155111   # Sepolia testnet chain ID
-FAUCET_AMOUNT = 0.001 # Amount of ETH to send per claim
+WHITELIST_FILE = 'whitelist.json'
 
-# Setup logging
+# --- Setup logging ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 logger.info("Starting Sepolia ETH Faucet Bot...")
 
-# Whitelist file and structure
-WHITELIST_FILE = 'whitelist.json'
-# Whitelist is a dictionary: { "telegram_user_id": [wallet1, wallet2, ...] }
+# --- Whitelist storage ---
+# Structure: { "telegram_user_id": [wallet_address1, wallet_address2, ...] }
 whitelist = {}
 
 def load_whitelist():
@@ -51,7 +48,7 @@ def load_whitelist():
             logger.error(f"Error loading whitelist: {e}")
             whitelist = {}
     else:
-        # Initialize whitelist from .env variable WHITELISTED_USER_IDS (comma separated)
+        # Initialize from WHITELISTED_USER_IDS (comma-separated) if exists in .env
         users_env = os.getenv('WHITELISTED_USER_IDS', '')
         if users_env.strip():
             whitelist = { str(int(x.strip())): [] for x in users_env.split(',') }
@@ -71,20 +68,21 @@ def save_whitelist():
 
 load_whitelist()
 
-# Initialize Web3 connection (for sending ETH)
+# --- Initialize Web3 ---
 w3 = Web3(Web3.HTTPProvider(ETH_RPC_URL))
 if not w3.is_connected():
     logger.error("Failed to connect to the Ethereum network.")
 else:
     logger.info("Connected to the Ethereum network.")
 
-# Rate limiting: record last claim time per user (by Telegram id, as int)
+# --- Rate limiting ---
+# Dictionary: { telegram_user_id (int): datetime of last claim }
 last_claim = {}
 
-# --- Conversation State ---
+# --- Conversation state ---
 FAUCET_WAIT_ADDRESS = 1
 
-# --- Reply Keyboard Main Menu ---
+# --- Main Menu Reply Keyboard ---
 def main_menu_keyboard(user_id: int):
     # Simulate right-aligned buttons by adding an empty string cell on the left.
     keyboard = [
@@ -96,7 +94,8 @@ def main_menu_keyboard(user_id: int):
         keyboard.append(["", "⚙️ Admin Panel"])
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
 
-# --- Command Handlers ---
+# --- Standard Command Handlers ---
+
 def start(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     update.message.reply_text(
@@ -115,13 +114,13 @@ def help_command(update: Update, context: CallbackContext) -> None:
         "• Each whitelisted user may have up to 10 wallet addresses (added by admin).\n"
         "• You can claim only once every 24 hours.\n\n"
         "Admin Commands (admin only):\n"
-        "  /adduser <telegram_user_id>\n"
-        "  /removeuser <telegram_user_id>\n"
-        "  /addwallet <wallet_address> <telegram_user_id>\n"
-        "  /addwl <telegram_user_id> <wallet_address>\n"
-        "  /removewallet <wallet_address>\n"
-        "  /setamount <amount>\n"
-        "  /whitelist or /listwhitelist"
+        "/adduser <telegram_user_id>\n"
+        "/removeuser <telegram_user_id>\n"
+        "/addwallet <wallet_address> <telegram_user_id>\n"
+        "/addwl <telegram_user_id> <wallet_address>\n"
+        "/removewallet <wallet_address>\n"
+        "/setamount <amount>\n"
+        "/whitelist or /listwhitelist"
     )
     update.message.reply_text(help_text, reply_markup=main_menu_keyboard(user_id))
     logger.info(f"User {update.effective_user.id} requested help.")
@@ -138,20 +137,22 @@ def status(update: Update, context: CallbackContext) -> None:
         elapsed = now - last_claim[user_id]
         if elapsed < timedelta(hours=24):
             remaining = timedelta(hours=24) - elapsed
-            update.message.reply_text(f"You're on cooldown. Try again in {str(remaining).split('.')[0]}.", reply_markup=main_menu_keyboard(user_id))
+            update.message.reply_text(f"You're on cooldown. Try again in {str(remaining).split('.')[0]}.",
+                                        reply_markup=main_menu_keyboard(user_id))
             logger.info(f"User {user_id} is on cooldown: {str(remaining).split('.')[0]}.")
             return
     update.message.reply_text("Great news! You are eligible for a claim.", reply_markup=main_menu_keyboard(user_id))
     logger.info(f"User {user_id} is eligible for a claim.")
 
-# --- Faucet Claim Conversation ---
+# --- Faucet Claim Conversation Handlers ---
+
 def faucet_start(update: Update, context: CallbackContext) -> int:
     user_id = update.effective_user.id
     update.message.reply_text(
         "You've chosen to claim ETH.\nPlease type your Ethereum address (or send /cancel to abort):",
         reply_markup=ReplyKeyboardRemove()
     )
-    logger.info(f"User {user_id} initiated a faucet claim.")
+    logger.info(f"User {user_id} initiated faucet claim.")
     return FAUCET_WAIT_ADDRESS
 
 def faucet_receive_address(update: Update, context: CallbackContext) -> int:
@@ -168,7 +169,7 @@ def faucet_receive_address(update: Update, context: CallbackContext) -> int:
         return FAUCET_WAIT_ADDRESS
     if eth_address not in whitelist[user_key]:
         update.message.reply_text("This wallet address is not authorized for faucet claims.")
-        logger.info(f"User {user_id} provided an unapproved wallet address: {eth_address}.")
+        logger.info(f"User {user_id} provided unapproved wallet address: {eth_address}.")
         return ConversationHandler.END
     now = datetime.now()
     if user_id in last_claim:
@@ -176,9 +177,8 @@ def faucet_receive_address(update: Update, context: CallbackContext) -> int:
         if elapsed < timedelta(hours=24):
             remaining = timedelta(hours=24) - elapsed
             update.message.reply_text(f"Oops! You can only claim once every 24 hours. Try again in {str(remaining).split('.')[0]}.")
-            logger.info(f"User {user_id} is on cooldown.")
+            logger.info(f"User {user_id} attempted claim during cooldown.")
             return ConversationHandler.END
-    # Build and send ETH transaction on Sepolia
     tx = {
         'nonce': w3.eth.getTransactionCount(FAUCET_ADDRESS),
         'to': eth_address,
@@ -193,7 +193,7 @@ def faucet_receive_address(update: Update, context: CallbackContext) -> int:
         last_claim[user_id] = now
         etherscan_link = f"https://sepolia.etherscan.io/tx/{tx_hash.hex()}"
         update.message.reply_text(f"Your transaction was successful!\nTx Hash: {tx_hash.hex()}\nView on Etherscan: {etherscan_link}")
-        logger.info(f"User {user_id} claimed faucet successfully. Tx: {tx_hash.hex()}")
+        logger.info(f"User {user_id} claimed faucet. Tx: {tx_hash.hex()}")
     except Exception as e:
         update.message.reply_text(f"An error occurred: {str(e)}")
         logger.error(f"Error during faucet claim for user {user_id}: {e}")
@@ -206,7 +206,13 @@ def faucet_cancel(update: Update, context: CallbackContext) -> int:
     logger.info(f"User {user_id} canceled faucet claim.")
     return ConversationHandler.END
 
-# --- Admin Commands ---
+# --- Admin Commands (Text-based) ---
+
+def admin_panel(update: Update, context: CallbackContext) -> None:
+    update.message.reply_text("Admin panel is accessible via text commands (e.g., /adduser, /addwl, etc.).",
+                                reply_markup=main_menu_keyboard(ADMIN_ID))
+    logger.info(f"Admin panel accessed by user {update.effective_user.id}.")
+
 def add_user(update: Update, context: CallbackContext) -> None:
     if update.effective_user.id != ADMIN_ID:
         update.message.reply_text("❌ You are not authorized to use this command.")
@@ -234,7 +240,7 @@ def remove_user(update: Update, context: CallbackContext) -> None:
     if user_id in whitelist:
         del whitelist[user_id]
         save_whitelist()
-        update.message.reply_text(f"✅ User {user_id} removed from the whitelist.")
+        update.message.reply_text(f"✅ User {user_id} removed from whitelist.")
         logger.info(f"Admin removed user {user_id} from whitelist.")
     else:
         update.message.reply_text("⚠️ User not found in whitelist.")
@@ -347,20 +353,20 @@ def main_menu_handler(update: Update, context: CallbackContext) -> None:
     else:
         update.message.reply_text("Please choose an option from the menu.", reply_markup=main_menu_keyboard(user_id))
 
-# --- Faucet Conversation Handler ---
-faucet_conv_handler = ConversationHandler(
-    entry_points=[MessageHandler(Filters.regex("^💧 Claim Faucet$"), faucet_start)],
-    states={
-        FAUCET_WAIT_ADDRESS: [MessageHandler(Filters.text & ~Filters.command, faucet_receive_address)]
-    },
-    fallbacks=[CommandHandler("cancel", faucet_cancel)],
-    per_user=True,
-)
-
 # --- Dispatcher Registration ---
 def main():
     updater = Updater(TELEGRAM_TOKEN, use_context=True)
     dp = updater.dispatcher
+
+    # Faucet conversation handler
+    faucet_conv_handler = ConversationHandler(
+        entry_points=[MessageHandler(Filters.regex("^💧 Claim Faucet$"), faucet_start)],
+        states={
+            FAUCET_WAIT_ADDRESS: [MessageHandler(Filters.text & ~Filters.command, faucet_receive_address)]
+        },
+        fallbacks=[CommandHandler("cancel", faucet_cancel)],
+        per_user=True,
+    )
 
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(faucet_conv_handler)
