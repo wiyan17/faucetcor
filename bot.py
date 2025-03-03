@@ -19,7 +19,7 @@ from web3 import Web3
 load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
-ETH_RPC_URL = os.getenv('ETH_RPC_URL')  # Use your ARB ETH RPC endpoint (e.g., via Alchemy)
+ETH_RPC_URL = os.getenv('ETH_RPC_URL')  # ARB ETH RPC endpoint (e.g., via Alchemy or Infura)
 FAUCET_ADDRESS = os.getenv('FAUCET_ADDRESS')
 FAUCET_PRIVATE_KEY = os.getenv('FAUCET_PRIVATE_KEY')
 ADMIN_ID = int(os.getenv('ADMIN_ID', '0'))
@@ -83,7 +83,7 @@ FAUCET_WAIT_ADDRESS = 1
 
 # --- Main Menu Reply Keyboard ---
 def main_menu_keyboard(user_id: int):
-    # Simulate right-aligned buttons by adding an empty cell on the left.
+    # Create a custom reply keyboard with right-aligned buttons by adding an empty cell on the left.
     keyboard = [
         ["", "💧 Claim Faucet"],
         ["", "⏰ Check Status"],
@@ -190,7 +190,7 @@ def faucet_receive_address(update: Update, context: CallbackContext) -> int:
         'nonce': w3.eth.get_transaction_count(faucet_addr),
         'to': to_address,
         'value': w3.to_wei(FAUCET_AMOUNT, 'ether'),
-        'gas': 35000,  # Increased gas limit
+        'gas': 25000,  # Increased gas limit
         'gasPrice': w3.eth.gas_price,
         'chainId': CHAIN_ID
     }
@@ -201,8 +201,8 @@ def faucet_receive_address(update: Update, context: CallbackContext) -> int:
         hash_str = tx_hash.hex()
         if not hash_str.startswith("0x"):
             hash_str = "0x" + hash_str
-        # Using Arbiscan for ARB ETH; adjust URL if necessary.
-        etherscan_link = f"https://arbiscan.io/tx/{hash_str}"
+        # Updated explorer URL for Sepolia Arbiscan
+        etherscan_link = f"https://sepolia.arbiscan.io/tx/{hash_str}"
         update.message.reply_text(
             f"Your transaction was successful!\nTx Hash: {hash_str}\nView on Arbiscan: {etherscan_link}"
         )
@@ -221,10 +221,8 @@ def faucet_cancel(update: Update, context: CallbackContext) -> int:
 
 # --- Admin Commands ---
 def admin_panel(update: Update, context: CallbackContext) -> None:
-    update.message.reply_text(
-        "Admin panel is accessible via text commands (e.g., /adduser, /addwallet, etc.).",
-        reply_markup=main_menu_keyboard(ADMIN_ID)
-    )
+    update.message.reply_text("Admin panel is accessible via text commands (e.g., /adduser, /addwallet, etc.).",
+                                reply_markup=main_menu_keyboard(ADMIN_ID))
     logger.info(f"Admin panel accessed by user {update.effective_user.id}.")
 
 def add_user(update: Update, context: CallbackContext) -> None:
