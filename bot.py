@@ -48,6 +48,7 @@ def load_whitelist():
             logger.error(f"Error loading whitelist: {e}")
             whitelist = {}
     else:
+        # Initialize from WHITELISTED_USER_IDS in .env (comma-separated)
         users_env = os.getenv('WHITELISTED_USER_IDS', '')
         if users_env.strip():
             whitelist = { str(int(x.strip())): [] for x in users_env.split(',') }
@@ -177,9 +178,18 @@ def faucet_receive_address(update: Update, context: CallbackContext) -> int:
             update.message.reply_text(f"Oops! You can only claim once every 24 hours. Try again in {str(remaining).split('.')[0]}.")
             logger.info(f"User {user_id} attempted claim during cooldown.")
             return ConversationHandler.END
+    # Convert addresses to checksum format
+    try:
+        to_address = w3.to_checksum_address(eth_address)
+        faucet_addr = w3.to_checksum_address(FAUCET_ADDRESS)
+    except Exception as e:
+        update.message.reply_text("An error occurred while processing addresses.")
+        logger.error(f"Error converting addresses for user {user_id}: {e}")
+        return ConversationHandler.END
+
     tx = {
-        'nonce': w3.eth.get_transaction_count(FAUCET_ADDRESS),
-        'to': eth_address,
+        'nonce': w3.eth.get_transaction_count(faucet_addr),
+        'to': to_address,
         'value': w3.to_wei(FAUCET_AMOUNT, 'ether'),
         'gas': 21000,
         'gasPrice': w3.eth.gas_price,
