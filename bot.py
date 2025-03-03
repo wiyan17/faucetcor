@@ -19,7 +19,7 @@ from web3 import Web3
 load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
-ETH_RPC_URL = os.getenv('ETH_RPC_URL')  # Sepolia RPC endpoint (e.g., Infura)
+ETH_RPC_URL = os.getenv('ETH_RPC_URL')  # Sepolia RPC endpoint (e.g., via Infura)
 FAUCET_ADDRESS = os.getenv('FAUCET_ADDRESS')
 FAUCET_PRIVATE_KEY = os.getenv('FAUCET_PRIVATE_KEY')
 ADMIN_ID = int(os.getenv('ADMIN_ID', '0'))
@@ -48,10 +48,9 @@ def load_whitelist():
             logger.error(f"Error loading whitelist: {e}")
             whitelist = {}
     else:
-        # Initialize from WHITELISTED_USER_IDS in .env (comma-separated)
         users_env = os.getenv('WHITELISTED_USER_IDS', '')
         if users_env.strip():
-            whitelist = {str(int(x.strip())): [] for x in users_env.split(',')}
+            whitelist = { str(int(x.strip())): [] for x in users_env.split(',') }
             logger.info("Whitelist initialized from .env.")
         else:
             whitelist = {}
@@ -135,8 +134,10 @@ def status(update: Update, context: CallbackContext) -> None:
         elapsed = now - last_claim[user_id]
         if elapsed < timedelta(hours=24):
             remaining = timedelta(hours=24) - elapsed
-            update.message.reply_text(f"You're on cooldown. Try again in {str(remaining).split('.')[0]}.",
-                                        reply_markup=main_menu_keyboard(user_id))
+            update.message.reply_text(
+                f"You're on cooldown. Try again in {str(remaining).split('.')[0]}.",
+                reply_markup=main_menu_keyboard(user_id)
+            )
             logger.info(f"User {user_id} is on cooldown: {str(remaining).split('.')[0]}.")
             return
     update.message.reply_text("Great news! You are eligible for a claim.", reply_markup=main_menu_keyboard(user_id))
@@ -173,11 +174,12 @@ def faucet_receive_address(update: Update, context: CallbackContext) -> int:
         elapsed = now - last_claim[user_id]
         if elapsed < timedelta(hours=24):
             remaining = timedelta(hours=24) - elapsed
-            update.message.reply_text(f"Oops! You can only claim once every 24 hours. Try again in {str(remaining).split('.')[0]}.")
+            update.message.reply_text(
+                f"Oops! You can only claim once every 24 hours. Try again in {str(remaining).split('.')[0]}.")
             logger.info(f"User {user_id} attempted claim during cooldown.")
             return ConversationHandler.END
     tx = {
-        'nonce': w3.eth.getTransactionCount(FAUCET_ADDRESS),
+        'nonce': w3.eth.get_transaction_count(FAUCET_ADDRESS),
         'to': eth_address,
         'value': w3.toWei(FAUCET_AMOUNT, 'ether'),
         'gas': 21000,
@@ -190,8 +192,7 @@ def faucet_receive_address(update: Update, context: CallbackContext) -> int:
         last_claim[user_id] = now
         etherscan_link = f"https://sepolia.etherscan.io/tx/{tx_hash.hex()}"
         update.message.reply_text(
-            f"Your transaction was successful!\nTx Hash: {tx_hash.hex()}\nView on Etherscan: {etherscan_link}"
-        )
+            f"Your transaction was successful!\nTx Hash: {tx_hash.hex()}\nView on Etherscan: {etherscan_link}")
         logger.info(f"User {user_id} claimed faucet. Tx: {tx_hash.hex()}")
     except Exception as e:
         update.message.reply_text(f"An error occurred: {str(e)}")
@@ -207,8 +208,9 @@ def faucet_cancel(update: Update, context: CallbackContext) -> int:
 
 # --- Admin Commands ---
 def admin_panel(update: Update, context: CallbackContext) -> None:
-    update.message.reply_text("Admin panel is accessible via text commands (e.g., /adduser, /addwallet, etc.).",
-                                reply_markup=main_menu_keyboard(ADMIN_ID))
+    update.message.reply_text(
+        "Admin panel is accessible via text commands (e.g., /adduser, /addwallet, etc.).",
+        reply_markup=main_menu_keyboard(ADMIN_ID))
     logger.info(f"Admin panel accessed by user {update.effective_user.id}.")
 
 def add_user(update: Update, context: CallbackContext) -> None:
