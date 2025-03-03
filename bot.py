@@ -48,7 +48,6 @@ def load_whitelist():
             logger.error(f"Error loading whitelist: {e}")
             whitelist = {}
     else:
-        # Initialize from WHITELISTED_USER_IDS in .env (comma-separated)
         users_env = os.getenv('WHITELISTED_USER_IDS', '')
         if users_env.strip():
             whitelist = { str(int(x.strip())): [] for x in users_env.split(',') }
@@ -178,26 +177,18 @@ def faucet_receive_address(update: Update, context: CallbackContext) -> int:
             update.message.reply_text(f"Oops! You can only claim once every 24 hours. Try again in {str(remaining).split('.')[0]}.")
             logger.info(f"User {user_id} attempted claim during cooldown.")
             return ConversationHandler.END
-    # Convert addresses to checksum format
-    try:
-        to_address = w3.to_checksum_address(eth_address)
-        faucet_addr = w3.to_checksum_address(FAUCET_ADDRESS)
-    except Exception as e:
-        update.message.reply_text("An error occurred while processing addresses.")
-        logger.error(f"Error converting addresses for user {user_id}: {e}")
-        return ConversationHandler.END
-
     tx = {
-        'nonce': w3.eth.get_transaction_count(faucet_addr),
-        'to': to_address,
+        'nonce': w3.eth.get_transaction_count(FAUCET_ADDRESS),
+        'to': eth_address,
         'value': w3.to_wei(FAUCET_AMOUNT, 'ether'),
         'gas': 21000,
-        'gasPrice': w3.eth.gas_price,
+        'maxFeePerGas': w3.eth.gas_price,
+        'maxPriorityFeePerGas': w3.to_wei(2, 'gwei'),
         'chainId': CHAIN_ID
     }
     try:
         signed_tx = w3.eth.account.sign_transaction(tx, FAUCET_PRIVATE_KEY)
-        tx_hash = w3.eth.send_raw_transaction(signed_tx.rawTransaction)
+        tx_hash = w3.eth.send_raw_transaction(signed_tx.raw_transaction)
         last_claim[user_id] = now
         etherscan_link = f"https://sepolia.etherscan.io/tx/{tx_hash.hex()}"
         update.message.reply_text(
@@ -218,8 +209,10 @@ def faucet_cancel(update: Update, context: CallbackContext) -> int:
 
 # --- Admin Commands ---
 def admin_panel(update: Update, context: CallbackContext) -> None:
-    update.message.reply_text("Admin panel is accessible via text commands (e.g., /adduser, /addwallet, etc.).",
-                                reply_markup=main_menu_keyboard(ADMIN_ID))
+    update.message.reply_text(
+        "Admin panel is accessible via text commands (e.g., /adduser, /addwallet, etc.).",
+        reply_markup=main_menu_keyboard(ADMIN_ID)
+    )
     logger.info(f"Admin panel accessed by user {update.effective_user.id}.")
 
 def add_user(update: Update, context: CallbackContext) -> None:
