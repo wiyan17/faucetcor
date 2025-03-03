@@ -119,7 +119,7 @@ def help_command(update: Update, context: CallbackContext) -> None:
         "/setamount <amount>\n"
         "/whitelist or /listwhitelist"
     )
-    update.message.reply_text(help_text, reply_markup=main_menu_keyboard(user_id))
+    update.message.reply_text(help_text, reply_markup=main_menu_keyboard(update.effective_user.id))
     logger.info(f"User {update.effective_user.id} requested help.")
 
 def status(update: Update, context: CallbackContext) -> None:
@@ -177,13 +177,21 @@ def faucet_receive_address(update: Update, context: CallbackContext) -> int:
             update.message.reply_text(f"Oops! You can only claim once every 24 hours. Try again in {str(remaining).split('.')[0]}.")
             logger.info(f"User {user_id} attempted claim during cooldown.")
             return ConversationHandler.END
+    # Convert addresses to checksum format
+    try:
+        to_address = w3.to_checksum_address(eth_address)
+        faucet_addr = w3.to_checksum_address(FAUCET_ADDRESS)
+    except Exception as e:
+        update.message.reply_text("An error occurred while processing addresses.")
+        logger.error(f"Error converting addresses for user {user_id}: {e}")
+        return ConversationHandler.END
+
     tx = {
-        'nonce': w3.eth.get_transaction_count(FAUCET_ADDRESS),
-        'to': eth_address,
+        'nonce': w3.eth.get_transaction_count(faucet_addr),
+        'to': to_address,
         'value': w3.to_wei(FAUCET_AMOUNT, 'ether'),
         'gas': 21000,
-        'maxFeePerGas': w3.eth.gas_price,
-        'maxPriorityFeePerGas': w3.to_wei(2, 'gwei'),
+        'gasPrice': w3.eth.gas_price,
         'chainId': CHAIN_ID
     }
     try:
@@ -209,10 +217,8 @@ def faucet_cancel(update: Update, context: CallbackContext) -> int:
 
 # --- Admin Commands ---
 def admin_panel(update: Update, context: CallbackContext) -> None:
-    update.message.reply_text(
-        "Admin panel is accessible via text commands (e.g., /adduser, /addwallet, etc.).",
-        reply_markup=main_menu_keyboard(ADMIN_ID)
-    )
+    update.message.reply_text("Admin panel is accessible via text commands (e.g., /adduser, /addwallet, etc.).",
+                                reply_markup=main_menu_keyboard(ADMIN_ID))
     logger.info(f"Admin panel accessed by user {update.effective_user.id}.")
 
 def add_user(update: Update, context: CallbackContext) -> None:
