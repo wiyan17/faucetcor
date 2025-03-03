@@ -19,18 +19,18 @@ from web3 import Web3
 load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
-ETH_RPC_URL = os.getenv('ETH_RPC_URL')  # Sepolia RPC endpoint (e.g., via Infura or Alchemy)
+ETH_RPC_URL = os.getenv('ETH_RPC_URL')  # For ARB ETH (use your Alchemy/Infura ARB endpoint)
 FAUCET_ADDRESS = os.getenv('FAUCET_ADDRESS')
 FAUCET_PRIVATE_KEY = os.getenv('FAUCET_PRIVATE_KEY')
 ADMIN_ID = int(os.getenv('ADMIN_ID', '0'))
 FAUCET_AMOUNT = 0.001  # ETH to send per claim
-CHAIN_ID = 11155111   # Sepolia testnet chain ID
+CHAIN_ID = 421614     # ARB ETH chain ID (adjusted for ARB ETH)
 WHITELIST_FILE = 'whitelist.json'
 
 # --- Setup logging ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-logger.info("Starting Sepolia ARB Faucet Bot...")
+logger.info("Starting ARB ETH Faucet Bot...")
 
 # --- Whitelist storage ---
 # Structure: { "telegram_user_id": [wallet_address1, wallet_address2, ...] }
@@ -48,6 +48,7 @@ def load_whitelist():
             logger.error(f"Error loading whitelist: {e}")
             whitelist = {}
     else:
+        # Initialize whitelist from .env variable WHITELISTED_USER_IDS (comma separated)
         users_env = os.getenv('WHITELISTED_USER_IDS', '')
         if users_env.strip():
             whitelist = { str(int(x.strip())): [] for x in users_env.split(',') }
@@ -83,7 +84,7 @@ FAUCET_WAIT_ADDRESS = 1
 
 # --- Main Menu Reply Keyboard ---
 def main_menu_keyboard(user_id: int):
-    # Simulate right-aligned buttons by adding an empty cell on the left.
+    # Create a custom reply keyboard with right-aligned buttons by adding an empty string cell on the left.
     keyboard = [
         ["", "💧 Claim Faucet"],
         ["", "⏰ Check Status"],
@@ -94,10 +95,11 @@ def main_menu_keyboard(user_id: int):
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
 
 # --- Command Handlers ---
+
 def start(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     update.message.reply_text(
-        "Welcome to the Cortensor Sepolia ARB Faucet Bot!\n\nPlease use the buttons below to navigate:",
+        "Welcome to the ARB ETH Faucet Bot!\n\nPlease use the buttons below to navigate:",
         reply_markup=main_menu_keyboard(user_id)
     )
     logger.info(f"User {user_id} started the bot.")
@@ -105,7 +107,7 @@ def start(update: Update, context: CallbackContext) -> None:
 def help_command(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     help_text = (
-        "Cortensor Sepolia ARB Faucet Bot Help:\n\n"
+        "ARB ETH Faucet Bot Help:\n\n"
         "• Tap 'Claim Faucet' to request 0.001 ETH (if eligible).\n"
         "• Tap 'Check Status' to view your claim cooldown.\n"
         "• Only whitelisted users (with approved wallet addresses) can claim ETH.\n"
@@ -144,6 +146,7 @@ def status(update: Update, context: CallbackContext) -> None:
     logger.info(f"User {user_id} is eligible for a claim.")
 
 # --- Faucet Claim Conversation ---
+
 def faucet_start(update: Update, context: CallbackContext) -> int:
     user_id = update.effective_user.id
     update.message.reply_text(
@@ -198,13 +201,13 @@ def faucet_receive_address(update: Update, context: CallbackContext) -> int:
         signed_tx = w3.eth.account.sign_transaction(tx, FAUCET_PRIVATE_KEY)
         tx_hash = w3.eth.send_raw_transaction(signed_tx.raw_transaction)
         last_claim[user_id] = now
-        # Ensure the hash string includes '0x'
+        # Ensure the hash string includes the '0x' prefix
         hash_str = tx_hash.hex()
         if not hash_str.startswith("0x"):
             hash_str = "0x" + hash_str
-        etherscan_link = f"https://sepolia.etherscan.io/tx/{hash_str}"
+        etherscan_link = f"https://arbiscan.io/tx/{hash_str}"
         update.message.reply_text(
-            f"Your transaction was successful!\nTx Hash: {hash_str}\nView on Etherscan: {etherscan_link}"
+            f"Your transaction was successful!\nTx Hash: {hash_str}\nView on Arbiscan: {etherscan_link}"
         )
         logger.info(f"User {user_id} claimed faucet. Tx: {hash_str}")
     except Exception as e:
@@ -220,6 +223,7 @@ def faucet_cancel(update: Update, context: CallbackContext) -> int:
     return ConversationHandler.END
 
 # --- Admin Commands ---
+
 def admin_panel(update: Update, context: CallbackContext) -> None:
     update.message.reply_text(
         "Admin panel is accessible via text commands (e.g., /adduser, /addwallet, etc.).",
