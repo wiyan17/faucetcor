@@ -48,7 +48,7 @@ def load_whitelist():
             logger.error(f"Error loading whitelist: {e}")
             whitelist = {}
     else:
-        # Initialize from WHITELISTED_USER_IDS (comma-separated) if exists in .env
+        # Initialize whitelist from .env variable WHITELISTED_USER_IDS (comma separated)
         users_env = os.getenv('WHITELISTED_USER_IDS', '')
         if users_env.strip():
             whitelist = { str(int(x.strip())): [] for x in users_env.split(',') }
@@ -79,12 +79,12 @@ else:
 # Dictionary: { telegram_user_id (int): datetime of last claim }
 last_claim = {}
 
-# --- Conversation state ---
+# --- Conversation State ---
 FAUCET_WAIT_ADDRESS = 1
 
 # --- Main Menu Reply Keyboard ---
 def main_menu_keyboard(user_id: int):
-    # Simulate right-aligned buttons by adding an empty string cell on the left.
+    # Simulate right-aligned buttons by adding an empty cell on the left.
     keyboard = [
         ["", "💧 Claim Faucet"],
         ["", "⏰ Check Status"],
@@ -94,8 +94,7 @@ def main_menu_keyboard(user_id: int):
         keyboard.append(["", "⚙️ Admin Panel"])
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
 
-# --- Standard Command Handlers ---
-
+# --- Command Handlers ---
 def start(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     update.message.reply_text(
@@ -137,15 +136,13 @@ def status(update: Update, context: CallbackContext) -> None:
         elapsed = now - last_claim[user_id]
         if elapsed < timedelta(hours=24):
             remaining = timedelta(hours=24) - elapsed
-            update.message.reply_text(f"You're on cooldown. Try again in {str(remaining).split('.')[0]}.",
-                                        reply_markup=main_menu_keyboard(user_id))
+            update.message.reply_text(f"You're on cooldown. Try again in {str(remaining).split('.')[0]}.", reply_markup=main_menu_keyboard(user_id))
             logger.info(f"User {user_id} is on cooldown: {str(remaining).split('.')[0]}.")
             return
     update.message.reply_text("Great news! You are eligible for a claim.", reply_markup=main_menu_keyboard(user_id))
     logger.info(f"User {user_id} is eligible for a claim.")
 
-# --- Faucet Claim Conversation Handlers ---
-
+# --- Faucet Claim Conversation ---
 def faucet_start(update: Update, context: CallbackContext) -> int:
     user_id = update.effective_user.id
     update.message.reply_text(
@@ -164,7 +161,8 @@ def faucet_receive_address(update: Update, context: CallbackContext) -> int:
         update.message.reply_text("Sorry, you are not authorized to use this faucet.")
         logger.info(f"Unauthorized faucet claim attempt by user {user_id}.")
         return ConversationHandler.END
-    if not w3.isAddress(eth_address):
+    # Use the correct method is_address() instead of isAddress()
+    if not w3.is_address(eth_address):
         update.message.reply_text("That doesn't seem like a valid Ethereum address. Please try again (or send /cancel to abort):")
         return FAUCET_WAIT_ADDRESS
     if eth_address not in whitelist[user_key]:
@@ -206,8 +204,7 @@ def faucet_cancel(update: Update, context: CallbackContext) -> int:
     logger.info(f"User {user_id} canceled faucet claim.")
     return ConversationHandler.END
 
-# --- Admin Commands (Text-based) ---
-
+# --- Admin Commands ---
 def admin_panel(update: Update, context: CallbackContext) -> None:
     update.message.reply_text("Admin panel is accessible via text commands (e.g., /adduser, /addwl, etc.).",
                                 reply_markup=main_menu_keyboard(ADMIN_ID))
@@ -353,20 +350,20 @@ def main_menu_handler(update: Update, context: CallbackContext) -> None:
     else:
         update.message.reply_text("Please choose an option from the menu.", reply_markup=main_menu_keyboard(user_id))
 
+# --- Faucet Conversation Handler ---
+faucet_conv_handler = ConversationHandler(
+    entry_points=[MessageHandler(Filters.regex("^💧 Claim Faucet$"), faucet_start)],
+    states={
+        FAUCET_WAIT_ADDRESS: [MessageHandler(Filters.text & ~Filters.command, faucet_receive_address)]
+    },
+    fallbacks=[CommandHandler("cancel", faucet_cancel)],
+    per_user=True,
+)
+
 # --- Dispatcher Registration ---
 def main():
     updater = Updater(TELEGRAM_TOKEN, use_context=True)
     dp = updater.dispatcher
-
-    # Faucet conversation handler
-    faucet_conv_handler = ConversationHandler(
-        entry_points=[MessageHandler(Filters.regex("^💧 Claim Faucet$"), faucet_start)],
-        states={
-            FAUCET_WAIT_ADDRESS: [MessageHandler(Filters.text & ~Filters.command, faucet_receive_address)]
-        },
-        fallbacks=[CommandHandler("cancel", faucet_cancel)],
-        per_user=True,
-    )
 
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(faucet_conv_handler)
