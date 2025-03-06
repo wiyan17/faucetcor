@@ -190,10 +190,13 @@ def faucet_receive_address(update: Update, context: CallbackContext) -> int:
         'nonce': w3.eth.get_transaction_count(faucet_addr),
         'to': to_address,
         'value': w3.to_wei(FAUCET_AMOUNT, 'ether'),
-        'gas': 25000,  # Increased gas limit
+        #'gas': 25000,  # Increased gas limit
         'gasPrice': w3.eth.gas_price,
         'chainId': CHAIN_ID
     }
+        estimated_gas = w3.eth.estimate_gas(tx)
+        tx['gas'] = int(estimated_gas * 1.2)
+
     try:
         signed_tx = w3.eth.account.sign_transaction(tx, FAUCET_PRIVATE_KEY)
         tx_hash = w3.eth.send_raw_transaction(signed_tx.raw_transaction)
