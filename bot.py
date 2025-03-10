@@ -20,10 +20,10 @@ from web3 import Web3
 # ------------------------------
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
-ETH_RPC_URL = os.getenv('ETH_RPC_URL')  # ARB ETH RPC endpoint (e.g., via Infura or Alchemy)
+ETH_RPC_URL = os.getenv('ETH_RPC_URL')  # ARB ETH RPC endpoint (e.g., via Alchemy or Infura)
 FAUCET_ADDRESS = os.getenv('FAUCET_ADDRESS')
 FAUCET_PRIVATE_KEY = os.getenv('FAUCET_PRIVATE_KEY')
-ADMIN_ID = int(os.getenv('ADMIN_ID', '0'))  # For /setamount command only
+ADMIN_ID = int(os.getenv('ADMIN_ID', '0'))  # For /setamount command
 FAUCET_AMOUNT = 0.001  # ETH to send per claim
 CHAIN_ID = 421614     # ARB ETH chain ID
 
@@ -35,6 +35,26 @@ logger = logging.getLogger(__name__)
 logger.info("Starting ARB ETH Faucet Bot...")
 
 # ------------------------------
+# Set Faucet Amount (Admin Command)
+# ------------------------------
+def set_amount(update: Update, context: CallbackContext) -> None:
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        update.message.reply_text("❌ You are not authorized to use this command.")
+        return
+    if len(context.args) != 1:
+        update.message.reply_text("Usage: /setamount <amount>")
+        return
+    try:
+        new_amount = float(context.args[0])
+        global FAUCET_AMOUNT
+        FAUCET_AMOUNT = new_amount
+        update.message.reply_text(f"✅ Faucet amount set to {new_amount} ETH.")
+        logger.info(f"Admin set faucet amount to {new_amount} ETH.")
+    except ValueError:
+        update.message.reply_text("❌ Invalid amount. Please enter a valid number.")
+
+# ------------------------------
 # Initialize Web3
 # ------------------------------
 w3 = Web3(Web3.HTTPProvider(ETH_RPC_URL))
@@ -44,7 +64,7 @@ else:
     logger.info("Connected to the Ethereum network.")
 
 # ------------------------------
-# Rate limiting (by Telegram user id)
+# Rate limiting
 # ------------------------------
 last_claim = {}  # { telegram_user_id (int): datetime of last claim }
 
@@ -97,7 +117,7 @@ def help_command(update: Update, context: CallbackContext) -> None:
 def balance(update: Update, context: CallbackContext) -> None:
     try:
         bal = w3.eth.get_balance(FAUCET_ADDRESS)
-        balance_eth = w3.from_wei(bal, 'ether')  # Using the new method name
+        balance_eth = w3.from_wei(bal, 'ether')  # Use from_wei (new method name)
         update.message.reply_text(f"Faucet wallet balance: {balance_eth} ETH")
         logger.info(f"Faucet balance: {balance_eth} ETH")
     except Exception as e:
@@ -148,7 +168,6 @@ def faucet_start(update: Update, context: CallbackContext) -> int:
 def faucet_receive_address(update: Update, context: CallbackContext) -> int:
     user_id = update.effective_user.id
     eth_address = update.message.text.strip().lower()
-    
     try:
         to_address = w3.to_checksum_address(eth_address)
     except Exception as e:
@@ -156,7 +175,7 @@ def faucet_receive_address(update: Update, context: CallbackContext) -> int:
         logger.error(f"Error converting address for user {user_id}: {e}")
         return FAUCET_WAIT_ADDRESS
 
-    # Check whitelist via contract call
+    # Check whitelist status using the ACL contract
     try:
         with open("abi_acl.json", "r") as f:
             acl_abi = json.load(f)
@@ -165,12 +184,12 @@ def faucet_receive_address(update: Update, context: CallbackContext) -> int:
         is_whitelisted = acl_contract.functions.isAlphaTester(to_address).call()
     except Exception as e:
         update.message.reply_text(f"Error checking whitelist: {str(e)}")
-        logger.error(f"Error calling isAlphaTester: {e}")
+        logger.error(f"Error calling isAlphaTester for user {user_id}: {e}")
         return ConversationHandler.END
 
     if not is_whitelisted:
         update.message.reply_text("This address is not whitelisted.")
-        logger.info(f"Address {eth_address} not whitelisted per contract.")
+        logger.info(f"Address {eth_address} not whitelisted according to ACL.")
         return ConversationHandler.END
 
     now = datetime.now()
