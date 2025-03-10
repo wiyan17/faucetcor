@@ -23,10 +23,9 @@ TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 ETH_RPC_URL = os.getenv('ETH_RPC_URL')  # ARB ETH RPC endpoint (e.g., via Alchemy or Infura)
 FAUCET_ADDRESS = os.getenv('FAUCET_ADDRESS')
 FAUCET_PRIVATE_KEY = os.getenv('FAUCET_PRIVATE_KEY')
-ADMIN_ID = int(os.getenv('ADMIN_ID', '0'))  # Not used now except for /setamount
+ADMIN_ID = int(os.getenv('ADMIN_ID', '0'))
 FAUCET_AMOUNT = 0.001  # ETH to send per claim
 CHAIN_ID = 421614     # ARB ETH chain ID
-WHITELIST_FILE = 'whitelist.json'
 
 # ------------------------------
 # Setup logging
@@ -34,44 +33,6 @@ WHITELIST_FILE = 'whitelist.json'
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 logger.info("Starting ARB ETH Faucet Bot...")
-
-# ------------------------------
-# Whitelist storage functions
-# ------------------------------
-# Structure: { "telegram_user_id": [wallet_address1, wallet_address2, ...] }
-whitelist = {}
-
-def load_whitelist():
-    global whitelist
-    if os.path.exists(WHITELIST_FILE):
-        try:
-            with open(WHITELIST_FILE, 'r') as f:
-                data = json.load(f)
-                whitelist = data.get("users", {})
-            logger.info("Whitelist loaded successfully.")
-        except Exception as e:
-            logger.error(f"Error loading whitelist: {e}")
-            whitelist = {}
-    else:
-        # Optionally initialize from env variable if desired
-        users_env = os.getenv('WHITELISTED_USER_IDS', '')
-        if users_env.strip():
-            whitelist = {str(int(x.strip())): [] for x in users_env.split(',')}
-            logger.info("Whitelist initialized from .env.")
-        else:
-            whitelist = {}
-        save_whitelist()
-
-def save_whitelist():
-    data = {"users": whitelist}
-    try:
-        with open(WHITELIST_FILE, 'w') as f:
-            json.dump(data, f, indent=4)
-        logger.info("Whitelist saved successfully.")
-    except Exception as e:
-        logger.error(f"Error saving whitelist: {e}")
-
-load_whitelist()
 
 # ------------------------------
 # Initialize Web3
@@ -83,7 +44,7 @@ else:
     logger.info("Connected to the Ethereum network.")
 
 # ------------------------------
-# Rate limiting
+# Rate limiting (by Telegram user id)
 # ------------------------------
 last_claim = {}  # { telegram_user_id (int): datetime of last claim }
 
@@ -98,8 +59,8 @@ FAUCET_WAIT_ADDRESS = 1
 def main_menu_keyboard(user_id: int):
     keyboard = [
         ["💧 Claim Faucet"],
-        ["⏰ Check Status"],
-        ["❓ Help"]
+        ["❓ Help"],
+        ["⏰ Check Balance"]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
 
@@ -119,34 +80,13 @@ def help_command(update: Update, context: CallbackContext) -> None:
     help_text = (
         "ARB ETH Faucet Bot Help:\n\n"
         "• Tap 'Claim Faucet' to request 0.001 ETH (if eligible).\n"
-        "• Tap 'Check Status' to view your claim cooldown.\n"
-        "• Use /balance to check the faucet wallet’s ETH balance.\n"
-        "• Admins can update the faucet amount using /setamount.\n"
-        "• Use /checkwhitelist <address> to check if an address is whitelisted in the ACL contract."
+        "  When prompted, enter your Ethereum address.\n\n"
+        "• Tap 'Check Balance' to view the faucet wallet’s ETH balance.\n\n"
+        "• Admins can update the faucet amount using /setamount <amount>.\n\n"
+        "The bot checks your address against the ACL contract; if isAlphaTester(address) returns true, your claim proceeds."
     )
     update.message.reply_text(help_text, reply_markup=main_menu_keyboard(user_id))
     logger.info(f"User {update.effective_user.id} requested help.")
-
-def status(update: Update, context: CallbackContext) -> None:
-    user_id = update.effective_user.id
-    user_key = str(user_id)
-    if user_key not in whitelist:
-        update.message.reply_text("Sorry, you are not authorized to claim ETH.", reply_markup=main_menu_keyboard(user_id))
-        logger.info(f"Unauthorized status check by user {user_id}.")
-        return
-    now = datetime.now()
-    if user_id in last_claim:
-        elapsed = now - last_claim[user_id]
-        if elapsed < timedelta(hours=24):
-            remaining = timedelta(hours=24) - elapsed
-            update.message.reply_text(
-                f"You're on cooldown. Try again in {str(remaining).split('.')[0]}.",
-                reply_markup=main_menu_keyboard(user_id)
-            )
-            logger.info(f"User {user_id} is on cooldown: {str(remaining).split('.')[0]}.")
-            return
-    update.message.reply_text("Great news! You are eligible for a claim.", reply_markup=main_menu_keyboard(user_id))
-    logger.info(f"User {user_id} is eligible for a claim.")
 
 def balance(update: Update, context: CallbackContext) -> None:
     try:
@@ -157,30 +97,6 @@ def balance(update: Update, context: CallbackContext) -> None:
     except Exception as e:
         update.message.reply_text(f"Error fetching balance: {str(e)}")
         logger.error(f"Error fetching faucet balance: {e}")
-
-# ------------------------------
-# New Command: Check Contract Whitelist
-# ------------------------------
-def check_whitelist_contract(update: Update, context: CallbackContext) -> None:
-    if len(context.args) < 1:
-        update.message.reply_text("Usage: /checkwhitelist <address>")
-        return
-    address = context.args[0]
-    try:
-        # Load the ACL contract ABI from file
-        with open("abi_acl.json", "r") as f:
-            acl_abi = json.load(f)
-        acl_addr = "0x6Dbc02BD4adbb34caeFb081fe60eDC41e393521B"
-        acl_contract = w3.eth.contract(address=acl_addr, abi=acl_abi)
-        result = acl_contract.functions.isAlphaTester(w3.to_checksum_address(address)).call()
-        if result:
-            update.message.reply_text(f"Address {address} is whitelisted (isAlphaTester = True).")
-        else:
-            update.message.reply_text(f"Address {address} is NOT whitelisted (isAlphaTester = False).")
-        logger.info(f"Checked whitelist for {address}: {result}")
-    except Exception as e:
-        update.message.reply_text(f"Error checking contract: {str(e)}")
-        logger.error(f"Error in check_whitelist_contract: {e}")
 
 # ------------------------------
 # Faucet Claim Conversation Handlers
@@ -196,20 +112,35 @@ def faucet_start(update: Update, context: CallbackContext) -> int:
 
 def faucet_receive_address(update: Update, context: CallbackContext) -> int:
     user_id = update.effective_user.id
-    user_key = str(user_id)
     eth_address = update.message.text.strip().lower()
-
-    if user_key not in whitelist:
-        update.message.reply_text("Sorry, you are not authorized to use this faucet.")
-        logger.info(f"Unauthorized faucet claim attempt by user {user_id}.")
-        return ConversationHandler.END
-    if not w3.is_address(eth_address):
+    
+    try:
+        to_address = w3.to_checksum_address(eth_address)
+    except Exception as e:
         update.message.reply_text("That doesn't seem like a valid Ethereum address. Please try again (or send /cancel to abort):")
+        logger.error(f"Error converting address for user {user_id}: {e}")
         return FAUCET_WAIT_ADDRESS
-    if eth_address not in whitelist[user_key]:
-        update.message.reply_text("This wallet address is not authorized for faucet claims.")
-        logger.info(f"User {user_id} provided unapproved wallet address: {eth_address}.")
+
+    # --- Contract-based whitelist check ---
+    try:
+        with open("abi_acl.json", "r") as f:
+            acl_abi = json.load(f)
+        acl_addr = "0x6Dbc02BD4adbb34caeFb081fe60eDC41e393521B"
+        acl_contract = w3.eth.contract(address=acl_addr, abi=acl_abi)
+        is_whitelisted = acl_contract.functions.isAlphaTester(to_address).call()
+    except Exception as e:
+        update.message.reply_text(f"Error checking whitelist: {str(e)}")
+        logger.error(f"Error calling isAlphaTester: {e}")
         return ConversationHandler.END
+
+    if not is_whitelisted:
+        update.message.reply_text("This address is not whitelisted.")
+        logger.info(f"Address {eth_address} is not whitelisted.")
+        return ConversationHandler.END
+
+    # ------------------------------
+    # Proceed with faucet claim
+    # ------------------------------
     now = datetime.now()
     if user_id in last_claim:
         elapsed = now - last_claim[user_id]
@@ -218,12 +149,12 @@ def faucet_receive_address(update: Update, context: CallbackContext) -> int:
             update.message.reply_text(f"Oops! You can only claim once every 24 hours. Try again in {str(remaining).split('.')[0]}.")
             logger.info(f"User {user_id} attempted claim during cooldown.")
             return ConversationHandler.END
+
     try:
-        to_address = w3.to_checksum_address(eth_address)
         faucet_addr = w3.to_checksum_address(FAUCET_ADDRESS)
     except Exception as e:
-        update.message.reply_text("An error occurred while processing addresses.")
-        logger.error(f"Error converting addresses for user {user_id}: {e}")
+        update.message.reply_text("Error processing faucet address.")
+        logger.error(f"Error converting faucet address: {e}")
         return ConversationHandler.END
 
     tx = {
@@ -265,15 +196,14 @@ def main():
     updater = Updater(TELEGRAM_TOKEN, use_context=True)
     dp = updater.dispatcher
 
-    # Basic commands
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(CommandHandler("help", help_command))
     dp.add_handler(CommandHandler("balance", balance))
     dp.add_handler(CommandHandler("setamount", set_amount))
-    dp.add_handler(CommandHandler("checkwhitelist", check_whitelist_contract))
-    
+    dp.add_handler(CommandHandler("checkwhitelist", check_whitelist_contract))  # Defined below
+
     # Faucet conversation
-    dp.add_handler(faucet_conv_handler := ConversationHandler(
+    dp.add_handler(ConversationHandler(
         entry_points=[MessageHandler(Filters.regex("^💧 Claim Faucet$"), faucet_start)],
         states={
             FAUCET_WAIT_ADDRESS: [MessageHandler(Filters.text & ~Filters.command, faucet_receive_address)]
@@ -281,13 +211,42 @@ def main():
         fallbacks=[CommandHandler("cancel", faucet_cancel)],
         per_user=True,
     ))
-    
-    # Other message-based commands (Check Status)
-    dp.add_handler(MessageHandler(Filters.regex("^(⏰ Check Status)$"), lambda u, c: status(u, c)))
+
+    # Also handle button messages (for main menu)
+    dp.add_handler(MessageHandler(Filters.regex("^(⏰ Check Balance)$"), balance))
     
     updater.start_polling()
     logger.info("Bot started!")
     updater.idle()
+
+# ------------------------------
+# New Command: Check Contract Whitelist
+# ------------------------------
+def check_whitelist_contract(update: Update, context: CallbackContext) -> None:
+    if len(context.args) < 1:
+        update.message.reply_text("Usage: /checkwhitelist <address>")
+        return
+    address = context.args[0]
+    try:
+        to_address = w3.to_checksum_address(address)
+    except Exception as e:
+        update.message.reply_text("Invalid Ethereum address.")
+        logger.error(f"Invalid address: {address}, error: {e}")
+        return
+    try:
+        with open("abi_acl.json", "r") as f:
+            acl_abi = json.load(f)
+        acl_addr = "0x6Dbc02BD4adbb34caeFb081fe60eDC41e393521B"
+        acl_contract = w3.eth.contract(address=acl_addr, abi=acl_abi)
+        result = acl_contract.functions.isAlphaTester(to_address).call()
+        if result:
+            update.message.reply_text(f"Address {address} is whitelisted (isAlphaTester = True).")
+        else:
+            update.message.reply_text(f"Address {address} is NOT whitelisted (isAlphaTester = False).")
+        logger.info(f"Checked contract whitelist for {address}: {result}")
+    except Exception as e:
+        update.message.reply_text(f"Error checking contract: {str(e)}")
+        logger.error(f"Error in check_whitelist_contract: {e}")
 
 if __name__ == '__main__':
     main()
