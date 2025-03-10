@@ -57,32 +57,12 @@ FAUCET_WAIT_ADDRESS = 1
 # Main Menu Reply Keyboard (for all users)
 # ------------------------------
 def main_menu_keyboard(user_id: int):
+    # Removed "Help" button from the menu
     keyboard = [
         ["💧 Claim Faucet"],
-        ["❓ Help"],
         ["⏰ Check Balance"]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
-
-# ------------------------------
-# Admin Command: Set Faucet Amount
-# ------------------------------
-def set_amount(update: Update, context: CallbackContext) -> None:
-    user_id = update.effective_user.id
-    if user_id != ADMIN_ID:
-        update.message.reply_text("❌ You are not authorized to use this command.")
-        return
-    if len(context.args) != 1:
-        update.message.reply_text("Usage: /setamount <amount>")
-        return
-    try:
-        new_amount = float(context.args[0])
-        global FAUCET_AMOUNT
-        FAUCET_AMOUNT = new_amount
-        update.message.reply_text(f"✅ Faucet amount set to {new_amount} ETH.")
-        logger.info(f"Admin set faucet amount to {new_amount} ETH.")
-    except ValueError:
-        update.message.reply_text("❌ Invalid amount. Please enter a valid number.")
 
 # ------------------------------
 # /start Command Handler
@@ -96,34 +76,12 @@ def start(update: Update, context: CallbackContext) -> None:
     logger.info(f"User {user_id} started the bot.")
 
 # ------------------------------
-# /help Command Handler (Updated)
-# ------------------------------
-def help_command(update: Update, context: CallbackContext) -> None:
-    user_id = update.effective_user.id
-    help_text = (
-        "Welcome to the ARB ETH Faucet Bot!\n\n"
-        "How to Claim ETH:\n"
-        "1. Tap 'Claim Faucet' and enter your Ethereum address when prompted.\n"
-        "   - The bot will call the ACL contract's isAlphaTester(address) function\n"
-        "     (using the ABI in 'abi_acl.json') to verify your address.\n"
-        "   - If approved (true), you'll receive 0.001 ETH (claimable once every 24 hours).\n"
-        "   - If not, you'll be informed that the address is not whitelisted.\n\n"
-        "Other Commands:\n"
-        "• /balance - Check the faucet wallet’s ETH balance.\n"
-        "• /checkwhitelist <address> - Check if an address is whitelisted via the ACL contract.\n"
-        "• /setamount <amount> - (Admin only) Update the faucet amount.\n\n"
-        "Note: You don't need to request whitelist as the bot now checks it directly on-chain."
-    )
-    update.message.reply_text(help_text, reply_markup=main_menu_keyboard(user_id))
-    logger.info(f"User {user_id} requested help.")
-
-# ------------------------------
 # /balance Command Handler
 # ------------------------------
 def balance(update: Update, context: CallbackContext) -> None:
     try:
         bal = w3.eth.get_balance(FAUCET_ADDRESS)
-        balance_eth = w3.from_wei(bal, "ether")  # Use new method name from_wei
+        balance_eth = w3.from_wei(bal, "ether")  # Using new method name from_wei
         update.message.reply_text(f"Faucet wallet balance: {balance_eth} ETH")
         logger.info(f"Faucet balance: {balance_eth} ETH")
     except Exception as e:
@@ -145,6 +103,7 @@ def check_whitelist_contract(update: Update, context: CallbackContext) -> None:
         logger.error(f"Invalid address: {address}, error: {e}")
         return
     try:
+        # Read the ACL contract ABI from the file in the same folder
         with open("abi_acl.json", "r") as f:
             acl_abi = json.load(f)
         acl_addr = "0x6Dbc02BD4adbb34caeFb081fe60eDC41e393521B"
@@ -263,7 +222,6 @@ def main():
     dp = updater.dispatcher
 
     dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(CommandHandler("help", help_command))
     dp.add_handler(CommandHandler("balance", balance))
     dp.add_handler(CommandHandler("setamount", set_amount))
     dp.add_handler(CommandHandler("checkwhitelist", check_whitelist_contract))
