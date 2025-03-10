@@ -38,10 +38,9 @@ logger = logging.getLogger(__name__)
 logger.info("Starting ARB ETH Faucet Bot...")
 
 # ------------------------------
-# Whitelist storage
+# Whitelist storage functions
 # ------------------------------
-# Structure: { "telegram_user_id": [wallet_address1, wallet_address2, ...] }
-whitelist = {}
+whitelist = {}  # Structure: { "telegram_user_id": [wallet_address1, wallet_address2, ...] }
 
 def load_whitelist():
     global whitelist
@@ -57,7 +56,7 @@ def load_whitelist():
     else:
         users_env = os.getenv('WHITELISTED_USER_IDS', '')
         if users_env.strip():
-            whitelist = {str(int(x.strip())): [] for x in users_env.split(',')}
+            whitelist = { str(int(x.strip())): [] for x in users_env.split(',') }
             logger.info("Whitelist initialized from .env.")
         else:
             whitelist = {}
@@ -77,7 +76,7 @@ load_whitelist()
 # ------------------------------
 # Pending whitelist requests (in-memory)
 # ------------------------------
-pending_requests = []  # list of Telegram user IDs (as strings)
+pending_requests = []  # List of Telegram user IDs (as strings)
 
 # ------------------------------
 # Initialize Web3
@@ -91,8 +90,7 @@ else:
 # ------------------------------
 # Rate limiting
 # ------------------------------
-# Dictionary: { telegram_user_id (int): datetime of last claim }
-last_claim = {}
+last_claim = {}  # Dictionary: { telegram_user_id (int): datetime of last claim }
 
 # ------------------------------
 # Conversation States
@@ -102,7 +100,7 @@ FAUCET_WAIT_ADDRESS = 1
 ADMIN_CHOICE, ADMIN_ADD_USER, ADMIN_REMOVE_USER, ADMIN_ADD_WALLET, ADMIN_REMOVE_WALLET, ADMIN_SET_AMOUNT = range(10, 16)
 
 # ------------------------------
-# Main Menu Reply Keyboard (for all users)
+# Main Menu and Admin Panel Keyboards
 # ------------------------------
 def main_menu_keyboard(user_id: int):
     keyboard = [
@@ -114,9 +112,6 @@ def main_menu_keyboard(user_id: int):
         keyboard.append(["", "⚙️ Admin Panel"])
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
 
-# ------------------------------
-# Admin Panel Inline Keyboard
-# ------------------------------
 def admin_menu_keyboard():
     keyboard = [
         [InlineKeyboardButton("Add User", callback_data="admin_add_user"),
@@ -273,7 +268,129 @@ def faucet_cancel(update: Update, context: CallbackContext) -> int:
     return ConversationHandler.END
 
 # ------------------------------
-# Admin Panel Conversation Handlers
+# Admin Command Handlers (Text Commands)
+# ------------------------------
+def add_user(update: Update, context: CallbackContext) -> None:
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        update.message.reply_text("❌ You are not authorized to use this command.")
+        return
+    if len(context.args) != 1:
+        update.message.reply_text("Usage: /adduser <telegram_user_id>")
+        return
+    uid = context.args[0]
+    if uid not in whitelist:
+        whitelist[uid] = []
+        save_whitelist()
+        update.message.reply_text(f"✅ User {uid} added to whitelist.")
+        logger.info(f"Admin added user {uid} to whitelist.")
+    else:
+        update.message.reply_text("⚠️ User is already whitelisted.")
+
+def remove_user(update: Update, context: CallbackContext) -> None:
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        update.message.reply_text("❌ You are not authorized to use this command.")
+        return
+    if len(context.args) != 1:
+        update.message.reply_text("Usage: /removeuser <telegram_user_id>")
+        return
+    uid = context.args[0]
+    if uid in whitelist:
+        del whitelist[uid]
+        save_whitelist()
+        update.message.reply_text(f"✅ User {uid} removed from whitelist.")
+        logger.info(f"Admin removed user {uid} from whitelist.")
+    else:
+        update.message.reply_text("⚠️ User not found in whitelist.")
+
+def add_wallet(update: Update, context: CallbackContext) -> None:
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        update.message.reply_text("❌ You are not authorized to use this command.")
+        return
+    if len(context.args) != 2:
+        update.message.reply_text("Usage: /addwallet <wallet_address> <telegram_user_id>")
+        return
+    wallet = context.args[0].lower()
+    uid = context.args[1]
+    if uid in whitelist:
+        if len(whitelist[uid]) < 10:
+            if wallet not in whitelist[uid]:
+                whitelist[uid].append(wallet)
+                save_whitelist()
+                update.message.reply_text(f"✅ Wallet {wallet} added for user {uid}.")
+                logger.info(f"Admin added wallet {wallet} for user {uid}.")
+            else:
+                update.message.reply_text("⚠️ Wallet already whitelisted.")
+        else:
+            update.message.reply_text("❌ User already has 10 wallets.")
+    else:
+        update.message.reply_text("❌ User is not whitelisted.")
+
+def remove_wallet(update: Update, context: CallbackContext) -> None:
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        update.message.reply_text("❌ You are not authorized to use this command.")
+        return
+    if len(context.args) != 1:
+        update.message.reply_text("Usage: /removewallet <wallet_address>")
+        return
+    wallet = context.args[0].lower()
+    found = False
+    for uid, wallets in whitelist.items():
+        if wallet in wallets:
+            wallets.remove(wallet)
+            found = True
+            break
+    if found:
+        save_whitelist()
+        update.message.reply_text(f"✅ Wallet {wallet} removed from whitelist.")
+        logger.info(f"Admin removed wallet {wallet}.")
+    else:
+        update.message.reply_text("⚠️ Wallet not found in whitelist.")
+
+def set_amount(update: Update, context: CallbackContext) -> None:
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        update.message.reply_text("❌ You are not authorized to use this command.")
+        return
+    if len(context.args) != 1:
+        update.message.reply_text("Usage: /setamount <amount>")
+        return
+    try:
+        new_amount = float(context.args[0])
+        global FAUCET_AMOUNT
+        FAUCET_AMOUNT = new_amount
+        update.message.reply_text(f"✅ Faucet amount set to {new_amount} ETH.")
+        logger.info(f"Admin set faucet amount to {new_amount} ETH.")
+    except ValueError:
+        update.message.reply_text("❌ Invalid amount. Please enter a valid number.")
+
+def list_whitelist(update: Update, context: CallbackContext) -> None:
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        update.message.reply_text("❌ You are not authorized to use this command.")
+        return
+    text = "📝 Whitelist:\n"
+    for uid, wallets in whitelist.items():
+        text += f"User {uid}: {wallets if wallets else 'No wallets'}\n"
+    update.message.reply_text(text if text.strip() else "⚠️ No users in whitelist.")
+
+def list_requests(update: Update, context: CallbackContext) -> None:
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        update.message.reply_text("❌ You are not authorized to use this command.")
+        return
+    if pending_requests:
+        text = "Pending whitelist requests:\n" + "\n".join(pending_requests)
+    else:
+        text = "No pending whitelist requests."
+    update.message.reply_text(text)
+    logger.info("Admin checked pending whitelist requests.")
+
+# ------------------------------
+# Admin Panel Conversation Handler (Using Inline Keyboard)
 # ------------------------------
 def admin_panel(update: Update, context: CallbackContext) -> None:
     update.message.reply_text("Welcome to the Admin Panel. Please choose an action:", reply_markup=admin_menu_keyboard())
@@ -317,24 +434,24 @@ def admin_callback_handler(update: Update, context: CallbackContext) -> int:
         return ConversationHandler.END
 
 def admin_add_user_input(update: Update, context: CallbackContext) -> int:
-    user_id = update.message.text.strip()
-    if user_id not in whitelist:
-        whitelist[user_id] = []
+    uid = update.message.text.strip()
+    if uid not in whitelist:
+        whitelist[uid] = []
         save_whitelist()
-        update.message.reply_text(f"✅ User {user_id} added to whitelist.")
-        logger.info(f"Admin added user {user_id} to whitelist.")
+        update.message.reply_text(f"✅ User {uid} added to whitelist.")
+        logger.info(f"Admin added user {uid} to whitelist.")
     else:
         update.message.reply_text("⚠️ User is already whitelisted.")
     update.message.reply_text("Returning to admin panel.", reply_markup=admin_menu_keyboard())
     return ADMIN_CHOICE
 
 def admin_remove_user_input(update: Update, context: CallbackContext) -> int:
-    user_id = update.message.text.strip()
-    if user_id in whitelist:
-        del whitelist[user_id]
+    uid = update.message.text.strip()
+    if uid in whitelist:
+        del whitelist[uid]
         save_whitelist()
-        update.message.reply_text(f"✅ User {user_id} removed from whitelist.")
-        logger.info(f"Admin removed user {user_id} from whitelist.")
+        update.message.reply_text(f"✅ User {uid} removed from whitelist.")
+        logger.info(f"Admin removed user {uid} from whitelist.")
     else:
         update.message.reply_text("⚠️ User not found in whitelist.")
     update.message.reply_text("Returning to admin panel.", reply_markup=admin_menu_keyboard())
@@ -346,14 +463,14 @@ def admin_add_wallet_input(update: Update, context: CallbackContext) -> int:
     if len(parts) < 2:
         update.message.reply_text("Invalid input. Use format: <wallet_address> <telegram_user_id>")
         return ADMIN_ADD_WALLET
-    wallet, user_id = parts[0].lower(), parts[1]
-    if user_id in whitelist:
-        if len(whitelist[user_id]) < 10:
-            if wallet not in whitelist[user_id]:
-                whitelist[user_id].append(wallet)
+    wallet, uid = parts[0].lower(), parts[1]
+    if uid in whitelist:
+        if len(whitelist[uid]) < 10:
+            if wallet not in whitelist[uid]:
+                whitelist[uid].append(wallet)
                 save_whitelist()
-                update.message.reply_text(f"✅ Wallet {wallet} added for user {user_id}.")
-                logger.info(f"Admin added wallet {wallet} for user {user_id}.")
+                update.message.reply_text(f"✅ Wallet {wallet} added for user {uid}.")
+                logger.info(f"Admin added wallet {wallet} for user {uid}.")
             else:
                 update.message.reply_text("⚠️ Wallet already whitelisted.")
         else:
@@ -366,7 +483,7 @@ def admin_add_wallet_input(update: Update, context: CallbackContext) -> int:
 def admin_remove_wallet_input(update: Update, context: CallbackContext) -> int:
     wallet = update.message.text.strip().lower()
     found = False
-    for user_id, wallets in whitelist.items():
+    for uid, wallets in whitelist.items():
         if wallet in wallets:
             wallets.remove(wallet)
             found = True
@@ -471,17 +588,6 @@ def main():
     updater.start_polling()
     logger.info("Bot started!")
     updater.idle()
-
-def list_requests(update: Update, context: CallbackContext) -> None:
-    if update.effective_user.id != ADMIN_ID:
-        update.message.reply_text("❌ You are not authorized to use this command.")
-        return
-    if pending_requests:
-        text = "Pending whitelist requests:\n" + "\n".join(pending_requests)
-    else:
-        text = "No pending whitelist requests."
-    update.message.reply_text(text)
-    logger.info("Admin checked pending whitelist requests.")
 
 if __name__ == '__main__':
     main()
