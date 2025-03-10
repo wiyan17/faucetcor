@@ -17,11 +17,12 @@ from telegram.ext import (
 )
 from web3 import Web3
 
-# --- Load environment variables ---
+# ------------------------------
+# Load environment variables
+# ------------------------------
 load_dotenv()
-
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
-ETH_RPC_URL = os.getenv('ETH_RPC_URL')  # ARB ETH RPC endpoint (e.g., via Infura or Alchemy)
+ETH_RPC_URL = os.getenv('ETH_RPC_URL')  # ARB ETH RPC endpoint (e.g., via Alchemy or Infura)
 FAUCET_ADDRESS = os.getenv('FAUCET_ADDRESS')
 FAUCET_PRIVATE_KEY = os.getenv('FAUCET_PRIVATE_KEY')
 ADMIN_ID = int(os.getenv('ADMIN_ID', '0'))
@@ -29,12 +30,16 @@ FAUCET_AMOUNT = 0.001  # ETH to send per claim
 CHAIN_ID = 421614     # ARB ETH chain ID
 WHITELIST_FILE = 'whitelist.json'
 
-# --- Setup logging ---
+# ------------------------------
+# Setup logging
+# ------------------------------
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 logger.info("Starting ARB ETH Faucet Bot...")
 
-# --- Whitelist storage ---
+# ------------------------------
+# Whitelist storage
+# ------------------------------
 # Structure: { "telegram_user_id": [wallet_address1, wallet_address2, ...] }
 whitelist = {}
 
@@ -52,7 +57,7 @@ def load_whitelist():
     else:
         users_env = os.getenv('WHITELISTED_USER_IDS', '')
         if users_env.strip():
-            whitelist = { str(int(x.strip())): [] for x in users_env.split(',') }
+            whitelist = {str(int(x.strip())): [] for x in users_env.split(',')}
             logger.info("Whitelist initialized from .env.")
         else:
             whitelist = {}
@@ -69,26 +74,36 @@ def save_whitelist():
 
 load_whitelist()
 
-# --- Pending whitelist requests (in-memory) ---
-pending_requests = []  # list of Telegram user IDs as strings
+# ------------------------------
+# Pending whitelist requests (in-memory)
+# ------------------------------
+pending_requests = []  # list of Telegram user IDs (as strings)
 
-# --- Initialize Web3 ---
+# ------------------------------
+# Initialize Web3
+# ------------------------------
 w3 = Web3(Web3.HTTPProvider(ETH_RPC_URL))
 if not w3.is_connected():
     logger.error("Failed to connect to the Ethereum network.")
 else:
     logger.info("Connected to the Ethereum network.")
 
-# --- Rate limiting ---
+# ------------------------------
+# Rate limiting
+# ------------------------------
 # Dictionary: { telegram_user_id (int): datetime of last claim }
 last_claim = {}
 
-# --- Conversation States ---
+# ------------------------------
+# Conversation States
+# ------------------------------
 FAUCET_WAIT_ADDRESS = 1
 # Admin panel conversation states (values 10 to 15)
 ADMIN_CHOICE, ADMIN_ADD_USER, ADMIN_REMOVE_USER, ADMIN_ADD_WALLET, ADMIN_REMOVE_WALLET, ADMIN_SET_AMOUNT = range(10, 16)
 
-# --- Main Menu Reply Keyboard (for all users) ---
+# ------------------------------
+# Main Menu Reply Keyboard (for all users)
+# ------------------------------
 def main_menu_keyboard(user_id: int):
     keyboard = [
         ["", "💧 Claim Faucet"],
@@ -99,7 +114,9 @@ def main_menu_keyboard(user_id: int):
         keyboard.append(["", "⚙️ Admin Panel"])
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
 
-# --- Admin Panel Inline Keyboard ---
+# ------------------------------
+# Admin Panel Inline Keyboard
+# ------------------------------
 def admin_menu_keyboard():
     keyboard = [
         [InlineKeyboardButton("Add User", callback_data="admin_add_user"),
@@ -113,7 +130,9 @@ def admin_menu_keyboard():
     ]
     return InlineKeyboardMarkup(keyboard)
 
-# --- User Command Handlers ---
+# ------------------------------
+# User Command Handlers
+# ------------------------------
 def start(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     update.message.reply_text(
@@ -177,7 +196,9 @@ def request_whitelist(update: Update, context: CallbackContext) -> None:
         update.message.reply_text("Your whitelist request has been submitted.")
         logger.info(f"User {user_id} requested whitelisting.")
 
-# --- Faucet Claim Conversation Handlers ---
+# ------------------------------
+# Faucet Claim Conversation Handlers
+# ------------------------------
 def faucet_start(update: Update, context: CallbackContext) -> int:
     user_id = update.effective_user.id
     update.message.reply_text(
@@ -251,7 +272,9 @@ def faucet_cancel(update: Update, context: CallbackContext) -> int:
     logger.info(f"User {user_id} canceled faucet claim.")
     return ConversationHandler.END
 
-# --- Admin Panel Conversation Handlers ---
+# ------------------------------
+# Admin Panel Conversation Handlers
+# ------------------------------
 def admin_panel(update: Update, context: CallbackContext) -> None:
     update.message.reply_text("Welcome to the Admin Panel. Please choose an action:", reply_markup=admin_menu_keyboard())
     logger.info(f"Admin panel accessed by user {update.effective_user.id}.")
@@ -373,7 +396,9 @@ def admin_cancel(update: Update, context: CallbackContext) -> int:
     update.message.reply_text("Exiting admin panel.", reply_markup=main_menu_keyboard(ADMIN_ID))
     return ConversationHandler.END
 
-# --- Admin Panel Conversation Handler ---
+# ------------------------------
+# Admin Panel Conversation Handler
+# ------------------------------
 ADMIN_CONV_HANDLER = ConversationHandler(
     entry_points=[CommandHandler("admin", admin_panel),
                   MessageHandler(Filters.regex("^⚙️ Admin Panel$"), admin_panel)],
@@ -389,7 +414,9 @@ ADMIN_CONV_HANDLER = ConversationHandler(
     per_user=True,
 )
 
-# --- Main Menu Handler (for ReplyKeyboard buttons) ---
+# ------------------------------
+# Main Menu Handler (for ReplyKeyboard buttons)
+# ------------------------------
 def main_menu_handler(update: Update, context: CallbackContext) -> None:
     text = update.message.text.strip()
     user_id = update.effective_user.id
@@ -404,7 +431,9 @@ def main_menu_handler(update: Update, context: CallbackContext) -> None:
     else:
         update.message.reply_text("Please choose an option from the menu.", reply_markup=main_menu_keyboard(user_id))
 
-# --- Faucet Conversation Handler ---
+# ------------------------------
+# Faucet Conversation Handler
+# ------------------------------
 faucet_conv_handler = ConversationHandler(
     entry_points=[MessageHandler(Filters.regex("^💧 Claim Faucet$"), faucet_start)],
     states={
@@ -414,7 +443,9 @@ faucet_conv_handler = ConversationHandler(
     per_user=True,
 )
 
-# --- Dispatcher Registration ---
+# ------------------------------
+# Dispatcher Registration
+# ------------------------------
 def main():
     updater = Updater(TELEGRAM_TOKEN, use_context=True)
     dp = updater.dispatcher
@@ -426,7 +457,7 @@ def main():
     dp.add_handler(CommandHandler("requestwhitelist", request_whitelist))
     dp.add_handler(CommandHandler("listrequests", list_requests))
     dp.add_handler(ADMIN_CONV_HANDLER)
-
+    
     # Also add fallback text commands for admin if needed
     dp.add_handler(CommandHandler("adduser", add_user))
     dp.add_handler(CommandHandler("removeuser", remove_user))
