@@ -20,12 +20,12 @@ from web3 import Web3
 # ------------------------------
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-ETH_RPC_URL = os.getenv("ETH_RPC_URL")  # ARB ETH RPC endpoint (e.g., via Infura or Alchemy)
+ETH_RPC_URL = os.getenv("ETH_RPC_URL")
 FAUCET_ADDRESS = os.getenv("FAUCET_ADDRESS")
 FAUCET_PRIVATE_KEY = os.getenv("FAUCET_PRIVATE_KEY")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))  # For /setamount command (admin only)
-FAUCET_AMOUNT = 0.001  # ETH to send per claim
-CHAIN_ID = 421614     # ARB ETH chain ID
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+FAUCET_AMOUNT = 0.001
+CHAIN_ID = 421614
 
 # ------------------------------
 # Setup logging
@@ -44,21 +44,22 @@ else:
     logger.info("Connected to the Ethereum network.")
 
 # ------------------------------
-# Rate limiting (by Telegram user id)
+# Rate limiting
 # ------------------------------
-last_claim = {}  # { telegram_user_id (int): datetime of last claim }
+last_claim = {}
 
 # ------------------------------
-# Conversation State for Faucet Claim
+# Conversation State
 # ------------------------------
 FAUCET_WAIT_ADDRESS = 1
 
 # ------------------------------
-# Main Menu Reply Keyboard (for all users)
+# Main Menu Keyboard
 # ------------------------------
 def main_menu_keyboard(user_id: int):
     keyboard = [
         ["💧 Claim Faucet"],
+        ["❓ Help"],
         ["⏰ Check Balance"]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
@@ -69,7 +70,7 @@ def main_menu_keyboard(user_id: int):
 def set_amount(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if user_id != ADMIN_ID:
-        update.message.reply_text("❌ You are not authorized to use this command.")
+        update.message.reply_text("❌ You are not authorized.")
         return
     if len(context.args) != 1:
         update.message.reply_text("Usage: /setamount <amount>")
@@ -81,7 +82,7 @@ def set_amount(update: Update, context: CallbackContext) -> None:
         update.message.reply_text(f"✅ Faucet amount set to {new_amount} ETH.")
         logger.info(f"Admin set faucet amount to {new_amount} ETH.")
     except ValueError:
-        update.message.reply_text("❌ Invalid amount. Please enter a valid number.")
+        update.message.reply_text("❌ Invalid amount.")
 
 # ------------------------------
 # /start Command Handler
@@ -89,10 +90,26 @@ def set_amount(update: Update, context: CallbackContext) -> None:
 def start(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     update.message.reply_text(
-        "Welcome to the ARB ETH Faucet Bot!\n\nPlease use the menu below to interact:",
+        "Welcome to the ARB ETH Faucet Bot!\n\nUse the menu below.",
         reply_markup=main_menu_keyboard(user_id)
     )
     logger.info(f"User {user_id} started the bot.")
+
+# ------------------------------
+# /help Command Handler (Simplified)
+# ------------------------------
+def help_command(update: Update, context: CallbackContext) -> None:
+    user_id = update.effective_user.id
+    help_text = (
+        "Process:\n"
+        "1. Tap 'Claim Faucet' and enter your Ethereum address.\n"
+        "2. The bot verifies your address on-chain.\n"
+        "3. If approved, you receive 0.001 ETH (once per 24 hrs).\n"
+        "4. Use /balance to check the wallet balance.\n"
+        "5. Use /checkwhitelist <address> to verify an address."
+    )
+    update.message.reply_text(help_text, reply_markup=main_menu_keyboard(user_id))
+    logger.info(f"User {user_id} requested help.")
 
 # ------------------------------
 # /balance Command Handler
@@ -100,12 +117,12 @@ def start(update: Update, context: CallbackContext) -> None:
 def balance(update: Update, context: CallbackContext) -> None:
     try:
         bal = w3.eth.get_balance(FAUCET_ADDRESS)
-        balance_eth = w3.from_wei(bal, "ether")  # New method name is from_wei
-        update.message.reply_text(f"Faucet wallet balance: {balance_eth} ETH")
+        balance_eth = w3.from_wei(bal, "ether")
+        update.message.reply_text(f"Faucet balance: {balance_eth} ETH")
         logger.info(f"Faucet balance: {balance_eth} ETH")
     except Exception as e:
         update.message.reply_text(f"Error fetching balance: {str(e)}")
-        logger.error(f"Error fetching faucet balance: {e}")
+        logger.error(f"Error fetching balance: {e}")
 
 # ------------------------------
 # /checkwhitelist Command Handler
@@ -122,19 +139,18 @@ def check_whitelist_contract(update: Update, context: CallbackContext) -> None:
         logger.error(f"Invalid address: {address}, error: {e}")
         return
     try:
-        # Read the ABI from the file "abi_acl.json" in the same folder
         with open("abi_acl.json", "r") as f:
             acl_abi = json.load(f)
         acl_addr = "0x6Dbc02BD4adbb34caeFb081fe60eDC41e393521B"
         acl_contract = w3.eth.contract(address=acl_addr, abi=acl_abi)
         result = acl_contract.functions.isAlphaTester(to_address).call()
         if result:
-            update.message.reply_text(f"Address {address} is whitelisted (isAlphaTester = True).")
+            update.message.reply_text(f"Address {address} is whitelisted.")
         else:
-            update.message.reply_text(f"Address {address} is NOT whitelisted (isAlphaTester = False).")
+            update.message.reply_text(f"Address {address} is NOT whitelisted.")
         logger.info(f"Checked whitelist for {address}: {result}")
     except Exception as e:
-        update.message.reply_text(f"Error checking contract: {str(e)}")
+        update.message.reply_text(f"Error checking whitelist: {str(e)}")
         logger.error(f"Error in check_whitelist_contract: {e}")
 
 # ------------------------------
@@ -159,7 +175,6 @@ def faucet_receive_address(update: Update, context: CallbackContext) -> int:
         logger.error(f"Error converting address for user {user_id}: {e}")
         return FAUCET_WAIT_ADDRESS
 
-    # Check whitelist via contract call
     try:
         with open("abi_acl.json", "r") as f:
             acl_abi = json.load(f)
@@ -173,7 +188,7 @@ def faucet_receive_address(update: Update, context: CallbackContext) -> int:
 
     if not is_whitelisted:
         update.message.reply_text("This address is not whitelisted.")
-        logger.info(f"Address {eth_address} not whitelisted per ACL contract.")
+        logger.info(f"Address {eth_address} not whitelisted.")
         return ConversationHandler.END
 
     now = datetime.now()
@@ -181,15 +196,15 @@ def faucet_receive_address(update: Update, context: CallbackContext) -> int:
         elapsed = now - last_claim[user_id]
         if elapsed < timedelta(hours=24):
             remaining = timedelta(hours=24) - elapsed
-            update.message.reply_text(f"Please wait {str(remaining).split('.')[0]} before claiming again.")
-            logger.info(f"User {user_id} attempted claim during cooldown.")
+            update.message.reply_text(f"Wait {str(remaining).split('.')[0]} before claiming again.")
+            logger.info(f"User {user_id} is on cooldown.")
             return ConversationHandler.END
 
     try:
         faucet_addr = w3.to_checksum_address(FAUCET_ADDRESS)
     except Exception as e:
         update.message.reply_text("Error processing faucet address.")
-        logger.error(f"Error converting faucet address: {e}")
+        logger.error(f"Error converting faucet address for user {user_id}: {e}")
         return ConversationHandler.END
 
     tx = {
@@ -237,6 +252,7 @@ def main():
     dp = updater.dispatcher
 
     dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(CommandHandler("help", help_command))
     dp.add_handler(CommandHandler("balance", balance))
     dp.add_handler(CommandHandler("setamount", set_amount))
     dp.add_handler(CommandHandler("checkwhitelist", check_whitelist_contract))
