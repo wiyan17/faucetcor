@@ -78,15 +78,20 @@ def start(update: Update, context: CallbackContext) -> None:
 def help_command(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     help_text = (
-        "ARB ETH Faucet Bot Help:\n\n"
-        "• Tap 'Claim Faucet' to request 0.001 ETH (if eligible).\n"
-        "  When prompted, enter your Ethereum address.\n\n"
-        "• Tap 'Check Balance' to view the faucet wallet’s ETH balance.\n\n"
-        "• Admins can update the faucet amount using /setamount <amount>.\n\n"
-        "• Use /checkwhitelist <address> to check whitelist status via the ACL contract."
+        "Welcome to the ARB ETH Faucet Bot!\n\n"
+        "Tutorial for Claiming ETH:\n"
+        "1. Tap the 'Claim Faucet' button.\n"
+        "2. When prompted, enter your Ethereum address.\n"
+        "   - The bot will convert it to checksum format and call the ACL contract's isAlphaTester() function.\n"
+        "   - If the function returns true, your address is approved and you will receive 0.01 ETH.\n"
+        "   - If false, you will be informed that the address is not whitelisted.\n\n"
+        "Other Commands:\n"
+        "• /balance - Check the faucet wallet’s ETH balance.\n"
+        "• /checkwhitelist <address> - Check if a specific address is whitelisted via the ACL contract.\n\n"
+        "For now, you can use these commands to interact with the faucet."
     )
     update.message.reply_text(help_text, reply_markup=main_menu_keyboard(user_id))
-    logger.info(f"User {update.effective_user.id} requested help.")
+    logger.info(f"User {user_id} requested help.")
 
 def balance(update: Update, context: CallbackContext) -> None:
     try:
