@@ -20,12 +20,12 @@ from web3 import Web3
 # ------------------------------
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-ETH_RPC_URL = os.getenv("ETH_RPC_URL")
+ETH_RPC_URL = os.getenv("ETH_RPC_URL")  # ARB ETH RPC endpoint (e.g., via Infura or Alchemy)
 FAUCET_ADDRESS = os.getenv("FAUCET_ADDRESS")
 FAUCET_PRIVATE_KEY = os.getenv("FAUCET_PRIVATE_KEY")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
-FAUCET_AMOUNT = 0.001
-CHAIN_ID = 421614
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))  # For /setamount command (admin only)
+FAUCET_AMOUNT = 0.001  # ETH to send per claim
+CHAIN_ID = 421614     # ARB ETH chain ID
 
 # ------------------------------
 # Setup logging
@@ -44,17 +44,17 @@ else:
     logger.info("Connected to the Ethereum network.")
 
 # ------------------------------
-# Rate limiting
+# Rate limiting (by Telegram user id)
 # ------------------------------
-last_claim = {}
+last_claim = {}  # { telegram_user_id (int): datetime of last claim }
 
 # ------------------------------
-# Conversation State
+# Conversation State for Faucet Claim
 # ------------------------------
 FAUCET_WAIT_ADDRESS = 1
 
 # ------------------------------
-# Main Menu Keyboard
+# Main Menu Reply Keyboard (for all users)
 # ------------------------------
 def main_menu_keyboard(user_id: int):
     keyboard = [
@@ -70,7 +70,7 @@ def main_menu_keyboard(user_id: int):
 def set_amount(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     if user_id != ADMIN_ID:
-        update.message.reply_text("❌ You are not authorized.")
+        update.message.reply_text("❌ You are not authorized to use this command.")
         return
     if len(context.args) != 1:
         update.message.reply_text("Usage: /setamount <amount>")
@@ -82,7 +82,7 @@ def set_amount(update: Update, context: CallbackContext) -> None:
         update.message.reply_text(f"✅ Faucet amount set to {new_amount} ETH.")
         logger.info(f"Admin set faucet amount to {new_amount} ETH.")
     except ValueError:
-        update.message.reply_text("❌ Invalid amount.")
+        update.message.reply_text("❌ Invalid amount. Please enter a valid number.")
 
 # ------------------------------
 # /start Command Handler
@@ -90,7 +90,7 @@ def set_amount(update: Update, context: CallbackContext) -> None:
 def start(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     update.message.reply_text(
-        "Welcome to the ARB ETH Faucet Bot!\n\nUse the menu below.",
+        "Welcome to the ARB ETH Faucet Bot!\n\nPlease use the menu below to interact:",
         reply_markup=main_menu_keyboard(user_id)
     )
     logger.info(f"User {user_id} started the bot.")
@@ -145,12 +145,12 @@ def check_whitelist_contract(update: Update, context: CallbackContext) -> None:
         acl_contract = w3.eth.contract(address=acl_addr, abi=acl_abi)
         result = acl_contract.functions.isAlphaTester(to_address).call()
         if result:
-            update.message.reply_text(f"Address {address} is whitelisted.")
+            update.message.reply_text(f"Address {address} is whitelisted (True).")
         else:
-            update.message.reply_text(f"Address {address} is NOT whitelisted.")
+            update.message.reply_text(f"Address {address} is NOT whitelisted (False).")
         logger.info(f"Checked whitelist for {address}: {result}")
     except Exception as e:
-        update.message.reply_text(f"Error checking whitelist: {str(e)}")
+        update.message.reply_text(f"Error checking contract: {str(e)}")
         logger.error(f"Error in check_whitelist_contract: {e}")
 
 # ------------------------------
@@ -168,6 +168,7 @@ def faucet_start(update: Update, context: CallbackContext) -> int:
 def faucet_receive_address(update: Update, context: CallbackContext) -> int:
     user_id = update.effective_user.id
     eth_address = update.message.text.strip().lower()
+    
     try:
         to_address = w3.to_checksum_address(eth_address)
     except Exception as e:
@@ -196,7 +197,7 @@ def faucet_receive_address(update: Update, context: CallbackContext) -> int:
         elapsed = now - last_claim[user_id]
         if elapsed < timedelta(hours=24):
             remaining = timedelta(hours=24) - elapsed
-            update.message.reply_text(f"Wait {str(remaining).split('.')[0]} before claiming again.")
+            update.message.reply_text(f"Please wait {str(remaining).split('.')[0]} before claiming again.")
             logger.info(f"User {user_id} is on cooldown.")
             return ConversationHandler.END
 
@@ -268,6 +269,7 @@ def main():
     dp.add_handler(conv_handler)
     
     dp.add_handler(MessageHandler(Filters.regex("^(⏰ Check Balance)$"), balance))
+    dp.add_handler(MessageHandler(Filters.regex("^(❓ Help)$"), help_command))
     
     updater.start_polling()
     logger.info("Bot started!")
