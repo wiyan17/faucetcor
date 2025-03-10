@@ -150,7 +150,7 @@ def status(update: Update, context: CallbackContext) -> None:
 def balance(update: Update, context: CallbackContext) -> None:
     try:
         bal = w3.eth.get_balance(FAUCET_ADDRESS)
-        balance_eth = w3.fromWei(bal, 'ether')
+        balance_eth = w3.from_wei(bal, 'ether')  # Updated method name
         update.message.reply_text(f"Faucet wallet balance: {balance_eth} ETH")
         logger.info(f"Faucet balance: {balance_eth} ETH")
     except Exception as e:
