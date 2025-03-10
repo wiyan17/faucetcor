@@ -23,7 +23,7 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 ETH_RPC_URL = os.getenv("ETH_RPC_URL")  # ARB ETH RPC endpoint (e.g., via Infura or Alchemy)
 FAUCET_ADDRESS = os.getenv("FAUCET_ADDRESS")
 FAUCET_PRIVATE_KEY = os.getenv("FAUCET_PRIVATE_KEY")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))  # For /setamount command
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))  # For /setamount command (admin only)
 FAUCET_AMOUNT = 0.001  # ETH to send per claim
 CHAIN_ID = 421614     # ARB ETH chain ID
 
@@ -57,12 +57,31 @@ FAUCET_WAIT_ADDRESS = 1
 # Main Menu Reply Keyboard (for all users)
 # ------------------------------
 def main_menu_keyboard(user_id: int):
-    # Removed "Help" button from the menu
     keyboard = [
         ["💧 Claim Faucet"],
         ["⏰ Check Balance"]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
+
+# ------------------------------
+# Admin Command: Set Faucet Amount
+# ------------------------------
+def set_amount(update: Update, context: CallbackContext) -> None:
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        update.message.reply_text("❌ You are not authorized to use this command.")
+        return
+    if len(context.args) != 1:
+        update.message.reply_text("Usage: /setamount <amount>")
+        return
+    try:
+        new_amount = float(context.args[0])
+        global FAUCET_AMOUNT
+        FAUCET_AMOUNT = new_amount
+        update.message.reply_text(f"✅ Faucet amount set to {new_amount} ETH.")
+        logger.info(f"Admin set faucet amount to {new_amount} ETH.")
+    except ValueError:
+        update.message.reply_text("❌ Invalid amount. Please enter a valid number.")
 
 # ------------------------------
 # /start Command Handler
@@ -81,7 +100,7 @@ def start(update: Update, context: CallbackContext) -> None:
 def balance(update: Update, context: CallbackContext) -> None:
     try:
         bal = w3.eth.get_balance(FAUCET_ADDRESS)
-        balance_eth = w3.from_wei(bal, "ether")  # Using new method name from_wei
+        balance_eth = w3.from_wei(bal, "ether")  # New method name is from_wei
         update.message.reply_text(f"Faucet wallet balance: {balance_eth} ETH")
         logger.info(f"Faucet balance: {balance_eth} ETH")
     except Exception as e:
@@ -103,7 +122,7 @@ def check_whitelist_contract(update: Update, context: CallbackContext) -> None:
         logger.error(f"Invalid address: {address}, error: {e}")
         return
     try:
-        # Read the ACL contract ABI from the file in the same folder
+        # Read the ABI from the file "abi_acl.json" in the same folder
         with open("abi_acl.json", "r") as f:
             acl_abi = json.load(f)
         acl_addr = "0x6Dbc02BD4adbb34caeFb081fe60eDC41e393521B"
@@ -133,7 +152,6 @@ def faucet_start(update: Update, context: CallbackContext) -> int:
 def faucet_receive_address(update: Update, context: CallbackContext) -> int:
     user_id = update.effective_user.id
     eth_address = update.message.text.strip().lower()
-    
     try:
         to_address = w3.to_checksum_address(eth_address)
     except Exception as e:
@@ -182,13 +200,12 @@ def faucet_receive_address(update: Update, context: CallbackContext) -> int:
         'chainId': CHAIN_ID
     }
     try:
-        # Estimate gas and add a 20% buffer
         estimated_gas = w3.eth.estimate_gas(tx)
         tx['gas'] = int(estimated_gas * 1.2)
     except Exception as e:
         update.message.reply_text("Error estimating gas. Using fallback gas limit.")
         logger.error(f"Error estimating gas for user {user_id}: {e}")
-        tx['gas'] = 35000  # fallback gas limit
+        tx['gas'] = 35000
 
     try:
         signed_tx = w3.eth.account.sign_transaction(tx, FAUCET_PRIVATE_KEY)
@@ -198,9 +215,7 @@ def faucet_receive_address(update: Update, context: CallbackContext) -> int:
         if not hash_str.startswith("0x"):
             hash_str = "0x" + hash_str
         etherscan_link = f"https://sepolia.arbiscan.io/tx/{hash_str}"
-        update.message.reply_text(
-            f"Success! Tx Hash: {hash_str}\nView on Arbiscan: {etherscan_link}"
-        )
+        update.message.reply_text(f"Success! Tx Hash: {hash_str}\nView on Arbiscan: {etherscan_link}")
         logger.info(f"User {user_id} claimed faucet. Tx: {hash_str}")
     except Exception as e:
         update.message.reply_text(f"Error during claim: {str(e)}")
