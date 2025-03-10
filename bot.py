@@ -38,7 +38,8 @@ logger.info("Starting ARB ETH Faucet Bot...")
 # ------------------------------
 # Whitelist storage functions
 # ------------------------------
-whitelist = {}  # Structure: { "telegram_user_id": [wallet_address1, wallet_address2, ...] }
+# Structure: { "telegram_user_id": [wallet_address1, wallet_address2, ...] }
+whitelist = {}
 
 def load_whitelist():
     global whitelist
@@ -72,11 +73,6 @@ def save_whitelist():
 load_whitelist()
 
 # ------------------------------
-# Pending whitelist requests (in-memory)
-# ------------------------------
-pending_requests = []  # list of Telegram user IDs (as strings)
-
-# ------------------------------
 # Initialize Web3
 # ------------------------------
 w3 = Web3(Web3.HTTPProvider(ETH_RPC_URL))
@@ -88,10 +84,11 @@ else:
 # ------------------------------
 # Rate limiting
 # ------------------------------
-last_claim = {}  # Dictionary: { telegram_user_id (int): datetime of last claim }
+# Dictionary: { telegram_user_id (int): datetime of last claim }
+last_claim = {}
 
 # ------------------------------
-# Conversation States
+# Conversation State for Faucet Claim
 # ------------------------------
 FAUCET_WAIT_ADDRESS = 1
 
@@ -123,9 +120,8 @@ def help_command(update: Update, context: CallbackContext) -> None:
         "ARB ETH Faucet Bot Help:\n\n"
         "• Tap 'Claim Faucet' to request 0.001 ETH (if eligible).\n"
         "• Tap 'Check Status' to view your claim cooldown.\n"
-        "• Use /balance to check the faucet wallet balance.\n"
-        "• Use /requestwhitelist to request whitelisting if you're not already whitelisted.\n"
-        "• Admins can use /setamount to update the faucet amount.\n"
+        "• Use /balance to check the faucet wallet balance.\n\n"
+        "Admins can update the faucet amount using /setamount."
     )
     update.message.reply_text(help_text, reply_markup=main_menu_keyboard(user_id))
     logger.info(f"User {update.effective_user.id} requested help.")
@@ -161,17 +157,6 @@ def balance(update: Update, context: CallbackContext) -> None:
         update.message.reply_text(f"Error fetching balance: {str(e)}")
         logger.error(f"Error fetching faucet balance: {e}")
 
-def request_whitelist(update: Update, context: CallbackContext) -> None:
-    user_id = str(update.effective_user.id)
-    if user_id in whitelist:
-        update.message.reply_text("You are already whitelisted.")
-    elif user_id in pending_requests:
-        update.message.reply_text("Your whitelist request is already pending.")
-    else:
-        pending_requests.append(user_id)
-        update.message.reply_text("Your whitelist request has been submitted.")
-        logger.info(f"User {user_id} requested whitelisting.")
-
 # ------------------------------
 # Faucet Claim Conversation Handlers
 # ------------------------------
@@ -188,7 +173,7 @@ def faucet_receive_address(update: Update, context: CallbackContext) -> int:
     user_id = update.effective_user.id
     user_key = str(user_id)
     eth_address = update.message.text.strip().lower()
-
+    
     if user_key not in whitelist:
         update.message.reply_text("Sorry, you are not authorized to use this faucet.")
         logger.info(f"Unauthorized faucet claim attempt by user {user_id}.")
@@ -249,7 +234,7 @@ def faucet_cancel(update: Update, context: CallbackContext) -> int:
     return ConversationHandler.END
 
 # ------------------------------
-# Admin Command: Set Amount
+# Admin Command: Set Amount (Text Command)
 # ------------------------------
 def set_amount(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
@@ -306,9 +291,8 @@ def main():
     dp.add_handler(faucet_conv_handler)
     dp.add_handler(MessageHandler(Filters.regex("^(💧 Claim Faucet|⏰ Check Status|❓ Help)$"), main_menu_handler))
     dp.add_handler(CommandHandler("balance", balance))
-    dp.add_handler(CommandHandler("requestwhitelist", request_whitelist))
-    dp.add_handler(CommandHandler("listrequests", list_requests))
     dp.add_handler(CommandHandler("setamount", set_amount))
+    dp.add_handler(CommandHandler("help", help_command))
 
     updater.start_polling()
     logger.info("Bot started!")
