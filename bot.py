@@ -21,7 +21,7 @@ from web3 import Web3
 load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
-ETH_RPC_URL = os.getenv('ETH_RPC_URL')  # ARB ETH RPC endpoint (e.g., via Alchemy or Infura)
+ETH_RPC_URL = os.getenv('ETH_RPC_URL')  # ARB ETH RPC endpoint (e.g., via Infura or Alchemy)
 FAUCET_ADDRESS = os.getenv('FAUCET_ADDRESS')
 FAUCET_PRIVATE_KEY = os.getenv('FAUCET_PRIVATE_KEY')
 ADMIN_ID = int(os.getenv('ADMIN_ID', '0'))
@@ -85,7 +85,7 @@ last_claim = {}
 
 # --- Conversation States ---
 FAUCET_WAIT_ADDRESS = 1
-# Define admin panel conversation states (values 10 to 15)
+# Admin panel conversation states (values 10 to 15)
 ADMIN_CHOICE, ADMIN_ADD_USER, ADMIN_REMOVE_USER, ADMIN_ADD_WALLET, ADMIN_REMOVE_WALLET, ADMIN_SET_AMOUNT = range(10, 16)
 
 # --- Main Menu Reply Keyboard (for all users) ---
@@ -191,7 +191,7 @@ def faucet_receive_address(update: Update, context: CallbackContext) -> int:
     user_id = update.effective_user.id
     user_key = str(user_id)
     eth_address = update.message.text.strip().lower()
-
+    
     if user_key not in whitelist:
         update.message.reply_text("Sorry, you are not authorized to use this faucet.")
         logger.info(f"Unauthorized faucet claim attempt by user {user_id}.")
@@ -435,6 +435,7 @@ def main():
     dp.add_handler(CommandHandler("setamount", set_amount))
     dp.add_handler(CommandHandler("whitelist", list_whitelist))
     dp.add_handler(CommandHandler("listwhitelist", list_whitelist))
+    dp.add_handler(CommandHandler("admin", admin_panel))
 
     updater.start_polling()
     logger.info("Bot started!")
