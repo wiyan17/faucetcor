@@ -118,7 +118,7 @@ def help_command(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     help_text = (
         "ARB ETH Faucet Bot Help:\n\n"
-        "• Tap 'Claim Faucet' to request 0.001 ETH (if eligible).\n"
+        "• Tap 'Claim Faucet' to request 0.01 ETH (if eligible).\n"
         "• Tap 'Check Status' to view your claim cooldown.\n"
         "• Use /balance to check the faucet wallet balance.\n\n"
         "Admins can update the faucet amount using /setamount."
