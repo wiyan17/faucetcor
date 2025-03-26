@@ -20,11 +20,11 @@ from web3 import Web3
 # ------------------------------
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-ETH_RPC_URL = os.getenv("ETH_RPC_URL")  # ARB ETH RPC endpoint (e.g., via Infura or Alchemy)
+ETH_RPC_URL = os.getenv("ETH_RPC_URL")  # ARB ETH RPC endpoint
 FAUCET_ADDRESS = os.getenv("FAUCET_ADDRESS")
 FAUCET_PRIVATE_KEY = os.getenv("FAUCET_PRIVATE_KEY")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))  # For /setamount command (admin only)
-FAUCET_AMOUNT = 0.001  # ETH to send per claim
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+FAUCET_AMOUNT = 0.001  # ETH per claim
 CHAIN_ID = 421614     # ARB ETH chain ID
 
 # ------------------------------
@@ -44,9 +44,16 @@ else:
     logger.info("Connected to the Ethereum network.")
 
 # ------------------------------
-# Rate limiting (by Telegram user id)
+# Claim settings and rate limiting
 # ------------------------------
-last_claim = {}  # { telegram_user_id (int): datetime of last claim }
+CLAIM_COOLDOWN = timedelta(hours=48)
+MAX_ADDRESSES_PER_USER = 15
+
+# Instead of a single last_claim, we track:
+# user_claims: {telegram_user_id: list of (address, claim_time)}
+user_claims = {}  # Tracks each claim made by a Telegram user in the last 48 hours.
+# address_claims: {ethereum_address: claim_time}
+address_claims = {}  # Tracks last claim time per Ethereum address.
 
 # ------------------------------
 # Conversation State for Faucet Claim
@@ -65,47 +72,29 @@ def main_menu_keyboard(user_id: int):
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
 
 # ------------------------------
-# Admin Command: Set Faucet Amount
-# ------------------------------
-def set_amount(update: Update, context: CallbackContext) -> None:
-    user_id = update.effective_user.id
-    if user_id != ADMIN_ID:
-        update.message.reply_text("❌ You are not authorized to use this command.")
-        return
-    if len(context.args) != 1:
-        update.message.reply_text("Usage: /setamount <amount>")
-        return
-    try:
-        new_amount = float(context.args[0])
-        global FAUCET_AMOUNT
-        FAUCET_AMOUNT = new_amount
-        update.message.reply_text(f"✅ Faucet amount set to {new_amount} ETH.")
-        logger.info(f"Admin set faucet amount to {new_amount} ETH.")
-    except ValueError:
-        update.message.reply_text("❌ Invalid amount. Please enter a valid number.")
-
-# ------------------------------
 # /start Command Handler
 # ------------------------------
 def start(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     update.message.reply_text(
-        "Welcome to the ARB ETH Faucet Bot!\n\nPlease use the menu below to interact:",
+        "Welcome to the ARB ETH Faucet Bot!\n\nPlease use the menu below:",
         reply_markup=main_menu_keyboard(user_id)
     )
     logger.info(f"User {user_id} started the bot.")
 
 # ------------------------------
-# /help Command Handler (Simplified)
+# /help Command Handler
 # ------------------------------
 def help_command(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     help_text = (
         "Process:\n"
         "1. Tap 'Claim Faucet' and enter your Ethereum address.\n"
-        "2. The bot verifies your address on-chain.\n"
-        "3. If approved, you receive 0.001 ETH (once per 24 hrs).\n"
-        "4. Use /balance to check the wallet balance.\n"
+        "   - The bot checks your address against the ACL contract.\n"
+        "   - If approved, you receive 0.001 ETH (claimable once every 48 hrs).\n"
+        "2. Each Telegram user can claim using up to 15 addresses within 48 hrs.\n"
+        "3. Each address can claim only once every 48 hrs.\n"
+        "4. Use /balance to check the faucet wallet’s balance.\n"
         "5. Use /checkwhitelist <address> to verify an address."
     )
     update.message.reply_text(help_text, reply_markup=main_menu_keyboard(user_id))
@@ -145,12 +134,12 @@ def check_whitelist_contract(update: Update, context: CallbackContext) -> None:
         acl_contract = w3.eth.contract(address=acl_addr, abi=acl_abi)
         result = acl_contract.functions.isAlphaTester(to_address).call()
         if result:
-            update.message.reply_text(f"Address {address} is whitelisted (True).")
+            update.message.reply_text(f"Address {address} is whitelisted.")
         else:
-            update.message.reply_text(f"Address {address} is NOT whitelisted (False).")
+            update.message.reply_text(f"Address {address} is NOT whitelisted.")
         logger.info(f"Checked whitelist for {address}: {result}")
     except Exception as e:
-        update.message.reply_text(f"Error checking contract: {str(e)}")
+        update.message.reply_text(f"Error checking whitelist: {str(e)}")
         logger.error(f"Error in check_whitelist_contract: {e}")
 
 # ------------------------------
@@ -176,6 +165,7 @@ def faucet_receive_address(update: Update, context: CallbackContext) -> int:
         logger.error(f"Error converting address for user {user_id}: {e}")
         return FAUCET_WAIT_ADDRESS
 
+    # Check whitelist via contract call
     try:
         with open("abi_acl.json", "r") as f:
             acl_abi = json.load(f)
@@ -193,14 +183,25 @@ def faucet_receive_address(update: Update, context: CallbackContext) -> int:
         return ConversationHandler.END
 
     now = datetime.now()
-    if user_id in last_claim:
-        elapsed = now - last_claim[user_id]
-        if elapsed < timedelta(hours=24):
-            remaining = timedelta(hours=24) - elapsed
-            update.message.reply_text(f"Please wait {str(remaining).split('.')[0]} before claiming again.")
-            logger.info(f"User {user_id} is on cooldown.")
+
+    # Check if the address was used in the last 48 hours
+    if to_address in address_claims:
+        last_time = address_claims[to_address]
+        if now - last_time < CLAIM_COOLDOWN:
+            update.message.reply_text("This address has already claimed in the last 48 hours.")
+            logger.info(f"Address {eth_address} already claimed.")
             return ConversationHandler.END
 
+    # Check if the user has claimed with 15 addresses in the last 48 hours
+    user_history = user_claims.get(user_id, [])
+    # Filter out claims older than 48 hours
+    user_history = [ (addr, t) for addr, t in user_history if now - t < CLAIM_COOLDOWN ]
+    if len(user_history) >= MAX_ADDRESSES_PER_USER:
+        update.message.reply_text("You have reached the maximum number of address claims (15) in 48 hours.")
+        logger.info(f"User {user_id} has reached maximum claim addresses.")
+        return ConversationHandler.END
+
+    # Proceed with claim
     try:
         faucet_addr = w3.to_checksum_address(FAUCET_ADDRESS)
     except Exception as e:
@@ -226,7 +227,6 @@ def faucet_receive_address(update: Update, context: CallbackContext) -> int:
     try:
         signed_tx = w3.eth.account.sign_transaction(tx, FAUCET_PRIVATE_KEY)
         tx_hash = w3.eth.send_raw_transaction(signed_tx.raw_transaction)
-        last_claim[user_id] = now
         hash_str = tx_hash.hex()
         if not hash_str.startswith("0x"):
             hash_str = "0x" + hash_str
@@ -236,6 +236,13 @@ def faucet_receive_address(update: Update, context: CallbackContext) -> int:
     except Exception as e:
         update.message.reply_text(f"Error during claim: {str(e)}")
         logger.error(f"Error during faucet claim for user {user_id}: {e}")
+        return ConversationHandler.END
+
+    # Record claim: update both address_claims and user_claims
+    address_claims[to_address] = now
+    user_history.append((to_address, now))
+    user_claims[user_id] = user_history
+
     update.message.reply_text("Returning to main menu.", reply_markup=main_menu_keyboard(user_id))
     return ConversationHandler.END
 
@@ -244,6 +251,14 @@ def faucet_cancel(update: Update, context: CallbackContext) -> int:
     update.message.reply_text("Faucet claim canceled.", reply_markup=main_menu_keyboard(user_id))
     logger.info(f"User {user_id} canceled faucet claim.")
     return ConversationHandler.END
+
+# ------------------------------
+# Additional Data Structures for 48-Hour Limits
+# ------------------------------
+CLAIM_COOLDOWN = timedelta(hours=48)
+MAX_ADDRESSES_PER_USER = 15
+user_claims = {}      # {telegram_user_id: [(address, claim_time), ...]}
+address_claims = {}   # {ethereum_address: claim_time}
 
 # ------------------------------
 # Dispatcher Registration and Main
@@ -269,7 +284,6 @@ def main():
     dp.add_handler(conv_handler)
     
     dp.add_handler(MessageHandler(Filters.regex("^(⏰ Check Balance)$"), balance))
-    dp.add_handler(MessageHandler(Filters.regex("^(❓ Help)$"), help_command))
     
     updater.start_polling()
     logger.info("Bot started!")
