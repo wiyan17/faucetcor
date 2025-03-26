@@ -24,7 +24,7 @@ ETH_RPC_URL = os.getenv("ETH_RPC_URL")  # ARB ETH RPC endpoint
 FAUCET_ADDRESS = os.getenv("FAUCET_ADDRESS")
 FAUCET_PRIVATE_KEY = os.getenv("FAUCET_PRIVATE_KEY")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
-FAUCET_AMOUNT = 0.001  # ETH per claim
+FAUCET_AMOUNT = 0.1  # ETH per claim
 CHAIN_ID = 421614     # ARB ETH chain ID
 
 # ------------------------------
