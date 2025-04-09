@@ -44,17 +44,17 @@ else:
     logger.info("Connected to the Ethereum network.")
 
 # ------------------------------
-# 48-hour rules and rate limiting
+# Claim rules and rate limiting (48 hrs)
 # ------------------------------
 CLAIM_COOLDOWN = timedelta(hours=48)
 MAX_ADDRESSES_PER_USER = 16
 
-# Tracking claim timestamps
+# Track last claim time per Ethereum address and per Telegram user
 address_claims = {}   # { ethereum_address: claim_time }
 user_claims = {}      # { telegram_user_id: [(address, claim_time), ...] }
 
 # ------------------------------
-# User Address Storage (via slash commands)
+# User Address Storage (for auto claim)
 # ------------------------------
 USER_ADDRESSES_FILE = "user_addresses.json"
 # Structure: { "telegram_user_id": [address1, address2, ...] }
@@ -85,18 +85,22 @@ def save_user_addresses():
 load_user_addresses()
 
 # ------------------------------
-# Conversation State for Claim (Claim uses button)
+# Conversation State for Faucet Claim
 # ------------------------------
 FAUCET_WAIT_ADDRESS = 1
 
 # ------------------------------
-# Main Menu Keyboard (only Claim and Help, Check Balance)
+# Main Menu Reply Keyboard (Buttons)
 # ------------------------------
 def main_menu_keyboard(user_id: int):
     keyboard = [
         ["💧 Claim Faucet"],
-        ["❓ Help"],
-        ["⏰ Check Balance"]
+        ["📥 Add Address"],
+        ["🗑️ Remove Address"],
+        ["📋 Check Addresses"],
+        ["🤖 Manual Claim"],
+        ["⏰ Check Balance"],
+        ["❓ Help"]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
 
@@ -110,20 +114,20 @@ def start(update: Update, context: CallbackContext) -> None:
     logger.info(f"User {user_id} started the bot.")
 
 # ------------------------------
-# Slash Command: /help and Help Button (same handler)
+# Slash Command & Button: /help and Help Button
 # ------------------------------
 def help_command(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     help_text = (
         "Process:\n"
-        "1. Tap 'Claim Faucet' and enter your Ethereum address. The bot checks your address on-chain; if approved, you'll receive 0.1 ETH (once every 48 hrs).\n"
-        "2. /balance - Check the faucet's ETH balance.\n"
-        "3. /checkwhitelist <address> - Verify an address via the ACL contract.\n"
-        "4. /addaddress <address> - Add an address for auto-claim.\n"
-        "5. /removeaddress <address> - Remove an address from your list.\n"
-        "6. /checkaddress - List your saved addresses.\n"
-        "7. /claimmanual - Manually claim for all your saved addresses (subject to limits).\n"
-        "8. /setamount <amount> - (Admin only) Update the faucet amount."
+        "1. Tap 'Claim Faucet' and enter your Ethereum address. The bot checks your address on-chain;\n"
+        "   if approved, you receive 0.1 ETH (once every 48 hrs).\n"
+        "2. /balance – Check the faucet balance.\n"
+        "3. /checkwhitelist <address> – Verify an address via the ACL contract.\n"
+        "4. /addaddress <address> – Add an address for auto claim.\n"
+        "5. /removeaddress <address> – Remove an address from your list.\n"
+        "6. /checkaddress – View your saved addresses.\n"
+        "7. /claimmanual – Claim for all your stored addresses.\n"
     )
     update.message.reply_text(help_text, reply_markup=main_menu_keyboard(user_id))
     logger.info(f"User {user_id} requested help.")
@@ -171,7 +175,7 @@ def check_whitelist_contract(update: Update, context: CallbackContext) -> None:
         logger.error(f"Error in check_whitelist_contract: {e}")
 
 # ------------------------------
-# Faucet Claim: Claim using Button (/claim uses button; conversation)
+# Faucet Claim Conversation Handlers (via Button)
 # ------------------------------
 def faucet_start(update: Update, context: CallbackContext) -> int:
     user_id = update.effective_user.id
@@ -220,7 +224,6 @@ def faucet_receive_address(update: Update, context: CallbackContext) -> int:
         update.message.reply_text("Error processing faucet address.")
         logger.error(f"Error converting faucet address for user {user_id}: {e}")
         return ConversationHandler.END
-
     tx = {
         'nonce': w3.eth.get_transaction_count(faucet_addr),
         'to': to_address,
@@ -248,7 +251,6 @@ def faucet_receive_address(update: Update, context: CallbackContext) -> int:
         update.message.reply_text(f"Error during claim: {str(e)}")
         logger.error(f"Error during faucet claim for user {user_id}: {e}")
         return ConversationHandler.END
-
     address_claims[to_address] = now
     user_hist.append((to_address, now))
     user_claims[user_id] = user_hist
@@ -278,7 +280,7 @@ def add_address(update: Update, context: CallbackContext) -> None:
         return
     current = user_addresses.get(user_id, [])
     if len(current) >= MAX_ADDRESSES_PER_USER:
-        update.message.reply_text("Maximum number of addresses (16) reached.")
+        update.message.reply_text("You have reached the maximum number of addresses (16).")
         return
     if to_address in current:
         update.message.reply_text("Address already saved.")
@@ -360,12 +362,12 @@ def claim_manual(update: Update, context: CallbackContext) -> None:
                 results.append(f"{addr}: Not whitelisted.")
                 continue
         except Exception as e:
-            results.append(f"{addr}: Whitelist check error.")
+            results.append(f"{addr}: Error checking whitelist.")
             continue
         try:
             faucet_addr = w3.to_checksum_address(FAUCET_ADDRESS)
         except Exception as e:
-            results.append(f"{addr}: Faucet address processing error.")
+            results.append(f"{addr}: Faucet address error.")
             continue
         tx = {
             'nonce': w3.eth.get_transaction_count(faucet_addr),
@@ -401,18 +403,17 @@ def main():
     updater = Updater(TELEGRAM_TOKEN, use_context=True)
     dp = updater.dispatcher
 
-    # Slash Commands
+    # Slash commands
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(CommandHandler("help", help_command))
     dp.add_handler(CommandHandler("balance", balance))
-    dp.add_handler(CommandHandler("setamount", set_amount))
     dp.add_handler(CommandHandler("checkwhitelist", check_whitelist_contract))
     dp.add_handler(CommandHandler("addaddress", add_address))
     dp.add_handler(CommandHandler("removeaddress", remove_address))
     dp.add_handler(CommandHandler("checkaddress", check_address))
     dp.add_handler(CommandHandler("claimmanual", claim_manual))
     
-    # Claim Faucet conversation (triggered by button)
+    # Conversation for faucet claim triggered by button
     conv_handler = ConversationHandler(
         entry_points=[MessageHandler(Filters.regex("^💧 Claim Faucet$"), faucet_start)],
         states={
@@ -423,7 +424,7 @@ def main():
     )
     dp.add_handler(conv_handler)
     
-    # Button triggers for check balance and help
+    # Button triggers for simple commands
     dp.add_handler(MessageHandler(Filters.regex("^(⏰ Check Balance)$"), balance))
     dp.add_handler(MessageHandler(Filters.regex("^(❓ Help)$"), help_command))
     
