@@ -23,9 +23,9 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 ETH_RPC_URL = os.getenv("ETH_RPC_URL")  # e.g., via Infura or Alchemy
 FAUCET_ADDRESS = os.getenv("FAUCET_ADDRESS")
 FAUCET_PRIVATE_KEY = os.getenv("FAUCET_PRIVATE_KEY")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))  # For /setamount command (admin only)
 FAUCET_AMOUNT = 0.1  # Claim amount: 0.1 ETH per claim
-CHAIN_ID = 421614    # ARB ETH chain ID
+CHAIN_ID = 421614   # ARB ETH chain ID
 
 # ------------------------------
 # Setup logging
@@ -44,17 +44,17 @@ else:
     logger.info("Connected to the Ethereum network.")
 
 # ------------------------------
-# 48-hour claim rules
+# Rate limiting and Claim Rules (48 hours)
 # ------------------------------
 CLAIM_COOLDOWN = timedelta(hours=48)
 MAX_ADDRESSES_PER_USER = 16
 
-# Track claims per address and per user
+# Track claims per Ethereum address and per Telegram user
 address_claims = {}   # {ethereum_address: claim_time}
 user_claims = {}      # {telegram_user_id: [(address, claim_time), ...]}
 
 # ------------------------------
-# User Address Storage
+# User Address Storage (for auto claim)
 # ------------------------------
 USER_ADDRESSES_FILE = "user_addresses.json"
 # Structure: { "telegram_user_id": [address1, address2, ...] }
@@ -85,11 +85,9 @@ def save_user_addresses():
 load_user_addresses()
 
 # ------------------------------
-# Conversation States
+# Conversation State
 # ------------------------------
 FAUCET_WAIT_ADDRESS = 1
-ADD_ADDRESS_WAIT = 2
-REMOVE_ADDRESS_WAIT = 3
 
 # ------------------------------
 # Main Menu Reply Keyboard
@@ -107,7 +105,27 @@ def main_menu_keyboard(user_id: int):
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=True)
 
 # ------------------------------
-# Command Handlers - Main Menu Options
+# Admin Command: Set Faucet Amount
+# ------------------------------
+def set_amount(update: Update, context: CallbackContext) -> None:
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        update.message.reply_text("❌ You are not authorized.")
+        return
+    if len(context.args) != 1:
+        update.message.reply_text("Usage: /setamount <amount>")
+        return
+    try:
+        new_amount = float(context.args[0])
+        global FAUCET_AMOUNT
+        FAUCET_AMOUNT = new_amount
+        update.message.reply_text(f"✅ Faucet amount set to {new_amount} ETH.")
+        logger.info(f"Admin set faucet amount to {new_amount} ETH.")
+    except ValueError:
+        update.message.reply_text("❌ Invalid amount.")
+
+# ------------------------------
+# /start Command Handler
 # ------------------------------
 def start(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
@@ -117,25 +135,27 @@ def start(update: Update, context: CallbackContext) -> None:
     )
     logger.info(f"User {user_id} started the bot.")
 
+# ------------------------------
+# /help Command Handler (Simplified)
+# ------------------------------
 def help_command(update: Update, context: CallbackContext) -> None:
     user_id = update.effective_user.id
     help_text = (
         "Process:\n"
         "1. Tap 'Claim Faucet' and enter your Ethereum address.\n"
-        "   - The bot verifies your address on-chain.\n"
-        "   - If approved, you receive 0.1 ETH (once every 48 hrs).\n"
-        "2. Tap '📥 Add Address' to store an address for auto-claim.\n"
-        "3. Tap '🗑️ Remove Address' to delete a stored address.\n"
-        "4. Tap '📋 Check Addresses' to view your stored addresses.\n"
-        "5. Tap '🤖 Manual Claim' to claim for all your stored addresses (subject to limits).\n"
-        "6. Tap '⏰ Check Balance' to view the faucet wallet’s balance.\n"
-        "7. Tap '❓ Help' to see this message.\n"
-        "8. Use /checkwhitelist <address> to verify an address's whitelist status.\n"
-        "9. Admins can update the faucet amount using /setamount <amount>."
+        "2. The bot verifies your address on-chain.\n"
+        "3. If approved, you receive 0.1 ETH (once every 48 hrs).\n"
+        "4. Tap '📥 Add Address' to save addresses for auto claim.\n"
+        "5. Tap '🤖 Manual Claim' to claim for all saved addresses.\n"
+        "6. Use /balance to check the faucet balance.\n"
+        "7. Use /checkwhitelist <address> to verify an address."
     )
     update.message.reply_text(help_text, reply_markup=main_menu_keyboard(user_id))
     logger.info(f"User {user_id} requested help.")
 
+# ------------------------------
+# /balance Command Handler
+# ------------------------------
 def balance(update: Update, context: CallbackContext) -> None:
     try:
         bal = w3.eth.get_balance(FAUCET_ADDRESS)
@@ -146,6 +166,9 @@ def balance(update: Update, context: CallbackContext) -> None:
         update.message.reply_text(f"Error fetching balance: {str(e)}")
         logger.error(f"Error fetching balance: {e}")
 
+# ------------------------------
+# /checkwhitelist Command Handler
+# ------------------------------
 def check_whitelist_contract(update: Update, context: CallbackContext) -> None:
     if len(context.args) < 1:
         update.message.reply_text("Usage: /checkwhitelist <address>")
@@ -187,7 +210,6 @@ def faucet_start(update: Update, context: CallbackContext) -> int:
 def faucet_receive_address(update: Update, context: CallbackContext) -> int:
     user_id = update.effective_user.id
     eth_address = update.message.text.strip().lower()
-    
     try:
         to_address = w3.to_checksum_address(eth_address)
     except Exception as e:
@@ -212,11 +234,13 @@ def faucet_receive_address(update: Update, context: CallbackContext) -> int:
         return ConversationHandler.END
 
     now = datetime.now()
+    # Check per-address 48-hour cooldown
     if to_address in address_claims and (now - address_claims[to_address] < CLAIM_COOLDOWN):
         update.message.reply_text("This address has already claimed in the last 48 hours.")
         logger.info(f"Address {eth_address} already claimed.")
         return ConversationHandler.END
 
+    # Check if the user has claimed with 16 addresses in the last 48 hours
     user_hist = user_claims.get(user_id, [])
     user_hist = [(addr, t) for addr, t in user_hist if now - t < CLAIM_COOLDOWN]
     if len(user_hist) >= MAX_ADDRESSES_PER_USER:
@@ -274,7 +298,7 @@ def faucet_cancel(update: Update, context: CallbackContext) -> int:
     return ConversationHandler.END
 
 # ------------------------------
-# Manual Claim: Process all stored addresses
+# Manual Claim: Claim for All Saved Addresses
 # ------------------------------
 def claim_manual(update: Update, context: CallbackContext) -> None:
     user_id = str(update.effective_user.id)
@@ -342,7 +366,7 @@ def claim_manual(update: Update, context: CallbackContext) -> None:
     logger.info(f"User {user_id} manual claim results: {results}")
 
 # ------------------------------
-# Address Management Commands via Buttons
+# Address Management Commands
 # ------------------------------
 def add_address(update: Update, context: CallbackContext) -> None:
     user_id = str(update.effective_user.id)
@@ -366,7 +390,7 @@ def add_address(update: Update, context: CallbackContext) -> None:
     current.append(to_address)
     user_addresses[user_id] = current
     save_user_addresses()
-    update.message.reply_text(f"Address {to_address} added.")
+    update.message.reply_text(f"Address {to_address} added successfully.")
     logger.info(f"User {user_id} added address {to_address}.")
 
 def remove_address(update: Update, context: CallbackContext) -> None:
@@ -388,7 +412,7 @@ def remove_address(update: Update, context: CallbackContext) -> None:
     current.remove(to_address)
     user_addresses[user_id] = current
     save_user_addresses()
-    update.message.reply_text(f"Address {to_address} removed.")
+    update.message.reply_text(f"Address {to_address} removed successfully.")
     logger.info(f"User {user_id} removed address {to_address}.")
 
 def check_address(update: Update, context: CallbackContext) -> None:
@@ -398,7 +422,7 @@ def check_address(update: Update, context: CallbackContext) -> None:
         update.message.reply_text("You have no saved addresses.")
     else:
         update.message.reply_text("Your saved addresses:\n" + "\n".join(current))
-    logger.info(f"User {user_id} checked addresses.")
+    logger.info(f"User {user_id} checked their addresses.")
 
 # ------------------------------
 # Dispatcher Registration and Main
@@ -407,7 +431,7 @@ def main():
     updater = Updater(TELEGRAM_TOKEN, use_context=True)
     dp = updater.dispatcher
 
-    # Main commands (accessible via buttons)
+    # Main commands
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(CommandHandler("help", help_command))
     dp.add_handler(CommandHandler("balance", balance))
