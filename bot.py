@@ -47,7 +47,7 @@ else:
 # Rate limiting and 48-hr rules
 # ------------------------------
 CLAIM_COOLDOWN = timedelta(hours=48)
-MAX_ADDRESSES_PER_USER = 15
+MAX_ADDRESSES_PER_USER = 20
 
 # Track claims by Telegram user and by Ethereum address
 user_claims = {}      # { telegram_user_id: [(address, claim_time), ...] }
